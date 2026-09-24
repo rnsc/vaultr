@@ -29,7 +29,9 @@ type Shell struct {
 	//
 	// RCFile: a file under $HOME (or under the directory in RCDirEnv when
 	// that variable is set) that gets one line loading the script at
-	// startup, `LoadLine` with %s replaced by the shell name.
+	// startup, `LoadLine` with %s replaced by the shell name. Prefer
+	// eval "$(...)" over source <(...): bash 3.2 (macOS) silently reads
+	// nothing from source <(...).
 	RCFile   string
 	RCDirEnv string
 	LoadLine string
@@ -43,11 +45,11 @@ type Shell struct {
 var Shells = []Shell{
 	{
 		Name: "bash", File: "bash.bash",
-		RCFile: ".bashrc", LoadLine: "command -v vaultr >/dev/null 2>&1 && source <(vaultr completion %s)",
+		RCFile: ".bashrc", LoadLine: `command -v vaultr >/dev/null 2>&1 && eval "$(vaultr completion %s)"`,
 	},
 	{
 		Name: "zsh", File: "zsh.zsh",
-		RCFile: ".zshrc", RCDirEnv: "ZDOTDIR", LoadLine: "command -v vaultr >/dev/null 2>&1 && source <(vaultr completion %s)",
+		RCFile: ".zshrc", RCDirEnv: "ZDOTDIR", LoadLine: `command -v vaultr >/dev/null 2>&1 && eval "$(vaultr completion %s)"`,
 	},
 	{
 		Name: "fish", File: "fish.fish",

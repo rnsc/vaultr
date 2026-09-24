@@ -214,7 +214,7 @@ func TestInstallRCDetails(t *testing.T) {
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".zshrc"))
 	if !strings.HasPrefix(string(b), "export FOO=1\n") || strings.Count(string(b), rcMarker) != 1 ||
-		!strings.Contains(string(b), "source <(vaultr completion zsh)") {
+		!strings.Contains(string(b), `eval "$(vaultr completion zsh)"`) {
 		t.Errorf(".zshrc:\n%s", b)
 	}
 	zdot := t.TempDir()

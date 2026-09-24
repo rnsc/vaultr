@@ -89,8 +89,8 @@ Commands, flags and `login -method` values complete too.
   unreachable server, you still get commands and flags. Paths just don't
   complete, and nothing is printed to your terminal.
 - **What install changes:** bash and zsh get one line in `~/.bashrc` or
-  `~/.zshrc` that loads `vaultr completion <shell>` at startup, so it always
-  matches the installed vaultr. fish gets
+  `~/.zshrc` (`eval "$(vaultr completion <shell>)"`) that loads the script at
+  startup, so it always matches the installed vaultr. fish gets
   `~/.config/fish/completions/vaultr.fish`. Running install again changes
   nothing.
 - **Setting it up yourself:** print the script with

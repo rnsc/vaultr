@@ -127,7 +127,7 @@ func TestBashCompletion(t *testing.T) {
 	}
 	c := newCLI(t, rootChild(t, time.Hour))
 	c.ok("index")
-	script := `source <(vaultr completion bash)
+	script := `eval "$(vaultr completion bash)"
 COMP_WORDS=(vaultr get "$1"); COMP_CWORD=2
 _vaultr
 printf '%s\n' "${COMPREPLY[@]}"`
@@ -176,7 +176,7 @@ func TestZshCompletionScriptParses(t *testing.T) {
 	}
 	c := newCLI(t, "")
 	// Loads compinit and registers the completion without errors.
-	cmd := exec.Command("zsh", "-f", "-c", `source <(vaultr completion zsh) && (( $+_comps[vaultr] )) && echo registered`)
+	cmd := exec.Command("zsh", "-f", "-c", `eval "$(vaultr completion zsh)" && (( $+_comps[vaultr] )) && echo registered`)
 	cmd.Env = append(shellEnv(c), "HOME="+t.TempDir())
 	out, err := cmd.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "registered" {
@@ -193,7 +193,7 @@ func TestCompletionInstallCommand(t *testing.T) {
 		t.Errorf("install: %+v", r)
 	}
 	b, err := os.ReadFile(filepath.Join(c.env["HOME"], ".zshrc"))
-	if err != nil || !strings.Contains(string(b), "source <(vaultr completion zsh)") {
+	if err != nil || !strings.Contains(string(b), `eval "$(vaultr completion zsh)"`) {
 		t.Errorf(".zshrc: %v %q", err, b)
 	}
 	if r := c.ok("completion", "install"); !strings.Contains(r.stderr, "already") {

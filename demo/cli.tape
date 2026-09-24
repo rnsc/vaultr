@@ -15,7 +15,7 @@ Set Framerate 24
 Set PlaybackSpeed 0.7
 
 Hide
-Type `export PS1='$ ' && source <(vaultr completion bash) && rm -rf "$VAULTR_CACHE_DIR" && clear`
+Type `export PS1='$ ' && eval "$(vaultr completion bash)" && rm -rf "$VAULTR_CACHE_DIR" && clear`
 Enter
 Sleep 500ms
 Show
