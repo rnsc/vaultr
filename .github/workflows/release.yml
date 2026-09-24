@@ -1,0 +1,97 @@
+name: release
+
+# Releases are cut automatically when CI passes on main after a merge. The
+# bump comes from the merge commit message (see scripts/next-version.sh):
+# patch by default, "feat:" or [minor] for minor, "!:" / BREAKING CHANGE /
+# [major] for major, [skip release] for none. You can also push a vX.Y.Z tag
+# yourself, or run this workflow by hand and pick the bump.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # Release binaries are built with the latest Go release so they
+          # carry its security fixes; go.mod only sets the minimum.
+          go-version: stable
+          check-latest: true
+
+      - name: Pick version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump || 'auto' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="$(scripts/next-version.sh "$BUMP")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "create=true" >> "$GITHUB_OUTPUT"
+          if [ -z "$tag" ]; then echo "No release for this commit." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Tag
+        if: steps.version.outputs.tag != '' && steps.version.outputs.create == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: GoReleaser
+        if: steps.version.outputs.tag != ''
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build provenance (verify with `gh attestation verify`). GitHub only
+      # offers this for public repositories on the free plan.
+      - name: Attest build provenance
+        if: steps.version.outputs.tag != '' && !github.event.repository.private
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip

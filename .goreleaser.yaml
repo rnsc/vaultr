@@ -1,0 +1,57 @@
+version: 2
+
+project_name: vaultr
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: vaultr
+    main: .
+    binary: vaultr
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    targets:
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - windows_amd64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: vaultr
+    ids: [vaultr]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: SHA256SUMS
+
+# No Apple notarization: Go's linker ad-hoc signs darwin/arm64 binaries,
+# which is all Apple silicon needs to run them. Gatekeeper only objects
+# to quarantined downloads (browsers); scripts/install.sh, gh and curl
+# don't set the quarantine flag.
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge branch"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    Verify downloads with `sha256sum -c SHA256SUMS --ignore-missing`.

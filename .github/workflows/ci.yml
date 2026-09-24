@@ -1,0 +1,159 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "not gofmt'ed:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+      - name: staticcheck
+        run: |
+          go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+          go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 -tags integration ./...
+      - name: go.mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Unit tests
+        run: go test -race -count=1 -coverprofile=coverage-unit.out ./...
+      - name: Coverage
+        run: |
+          echo "### Unit test coverage" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage-unit.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    name: integration (${{ matrix.vault }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # Vault CE versions, plus OpenBao, which also runs the namespace
+        # tests (namespaces are Enterprise-only in Vault).
+        vault: ["1.15.6", "1.21.4", "latest", "openbao-2.5.5"]
+        include:
+          - os: macos-latest
+            vault: latest
+    env:
+      VAULT_DEV_PORT: "8200"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        with:
+          path: .cache/vault
+          key: vault-${{ runner.os }}-${{ runner.arch }}-${{ matrix.vault }}
+      - name: Start Vault dev server
+        run: scripts/vault-dev.sh start "${{ matrix.vault }}"
+      - name: Integration tests
+        env:
+          VAULT_ADDR: http://127.0.0.1:8200
+          VAULT_TOKEN: root
+        run: >
+          go test -tags integration -race -count=1 -v
+          -coverpkg=./internal/...
+          -coverprofile=coverage-integration.out
+          ./integration
+      - name: Coverage
+        if: always()
+        run: |
+          if [ -f coverage-integration.out ]; then
+            echo "### Integration coverage (vault ${{ matrix.vault }}, ${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+            go tool cover -func=coverage-integration.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Vault server log
+        if: failure()
+        run: cat .cache/vault/server-8200.log
+      - name: Stop Vault
+        if: always()
+        run: scripts/vault-dev.sh stop
+
+  # Dry run of the release build (all targets), with the binaries attached
+  # to the workflow run for manual testing.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
+      - name: Smoke test
+        run: |
+          ./dist/vaultr_linux_amd64_v1/vaultr version
+          ./dist/vaultr_linux_amd64_v1/vaultr help | grep -q Usage
+      - name: Install script (checksum + install from the built archives)
+        run: |
+          scripts/install.sh --from dist --dir "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/vaultr" version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaultr-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          retention-days: 7
+
+  # Single required check for branch protection.
+  ci-ok:
+    if: always()
+    needs: [lint, unit, integration, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs passed
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "true" ]; then
+            echo "some jobs failed: ${{ join(needs.*.result, ', ') }}"
+            exit 1
+          fi

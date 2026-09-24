@@ -1,0 +1,174 @@
+package cache
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/rnsc/vaultr/internal/index"
+	"github.com/rnsc/vaultr/internal/vault"
+)
+
+// fakeVault implements lookup-self and a cubbyhole for one valid token.
+type fakeVault struct {
+	mu     sync.Mutex
+	token  string
+	expire time.Time
+	now    time.Time
+	cubby  map[string]json.RawMessage
+}
+
+func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w.Header().Set("Date", f.now.UTC().Format(http.TimeFormat))
+	if r.Header.Get("X-Vault-Token") != f.token {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+		return
+	}
+	p := strings.TrimPrefix(r.URL.Path, "/v1/")
+	switch {
+	case p == "auth/token/lookup-self":
+		exp := f.expire.Format(time.RFC3339)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"expire_time": exp}})
+	case strings.HasPrefix(p, "cubbyhole/"):
+		switch r.Method {
+		case http.MethodPost:
+			var body json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.cubby[p] = body
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodDelete:
+			delete(f.cubby, p)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			d, ok := f.cubby[p]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"errors":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":` + string(d) + `}`))
+		}
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func setup(t *testing.T) (*fakeVault, *Store) {
+	t.Helper()
+	fv := &fakeVault{token: "hvs.test", now: time.Now(), expire: time.Now().Add(8 * time.Hour), cubby: map[string]json.RawMessage{}}
+	srv := httptest.NewServer(fv)
+	t.Cleanup(srv.Close)
+	c, err := vault.New(vault.Config{Addr: srv.URL, Token: fv.token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fv, &Store{Dir: t.TempDir(), Client: c}
+}
+
+var sample = []index.Entry{{Path: "secret/a", Mount: "secret/", KV: 2, Keys: []string{"password"}}}
+
+func TestRoundTrip(t *testing.T) {
+	_, s := setup(t)
+	ctx := context.Background()
+	h, warn, err := s.Save(ctx, sample, 0)
+	if err != nil || warn != "" {
+		t.Fatalf("save: %v %q", err, warn)
+	}
+	if !h.Bound() || h.Expires.Sub(h.Created) != MaxAge {
+		t.Fatalf("unexpected header %+v", h)
+	}
+	raw, _ := os.ReadFile(s.File())
+	if strings.Contains(string(raw), "password") {
+		t.Fatal("key names stored in clear text")
+	}
+	got, _, err := s.Load(ctx)
+	if err != nil || len(got) != 1 || got[0].Keys[0] != "password" {
+		t.Fatalf("load: %v %+v", err, got)
+	}
+}
+
+func TestExpiryCappedByToken(t *testing.T) {
+	fv, s := setup(t)
+	fv.expire = fv.now.Add(10 * time.Minute)
+	h, _, err := s.Save(context.Background(), sample, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := h.Expires.Sub(h.Created); d > 10*time.Minute+time.Second {
+		t.Fatalf("expiry not capped by token: %s", d)
+	}
+}
+
+func TestExpiredUsesServerClock(t *testing.T) {
+	fv, s := setup(t)
+	ctx := context.Background()
+	if _, _, err := s.Save(ctx, sample, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	fv.mu.Lock()
+	fv.now = fv.now.Add(61 * time.Minute) // local clock untouched
+	fv.mu.Unlock()
+	if _, _, err := s.Load(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("want ErrStale, got %v", err)
+	}
+	if _, err := os.Stat(s.File()); !os.IsNotExist(err) {
+		t.Fatal("expired cache not deleted")
+	}
+	if len(fv.cubby) != 0 {
+		t.Fatal("cubbyhole key not deleted")
+	}
+}
+
+func TestKeyGoneMeansUnreadable(t *testing.T) {
+	fv, s := setup(t)
+	ctx := context.Background()
+	if _, _, err := s.Save(ctx, sample, 0); err != nil {
+		t.Fatal(err)
+	}
+	fv.mu.Lock()
+	fv.cubby = map[string]json.RawMessage{} // token expired: Vault wiped cubbyhole
+	fv.mu.Unlock()
+	if _, _, err := s.Load(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("want ErrStale, got %v", err)
+	}
+}
+
+func TestOtherTokenCannotDecrypt(t *testing.T) {
+	fv, s := setup(t)
+	ctx := context.Background()
+	if _, _, err := s.Save(ctx, sample, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Same cubbyhole contents, different token: the token is part of the key.
+	fv.token = "hvs.other"
+	c, _ := vault.New(vault.Config{Addr: s.Client.Addr, Token: "hvs.other"})
+	s2 := &Store{Dir: s.Dir, Client: c}
+	if _, _, err := s2.Load(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("want ErrStale, got %v", err)
+	}
+}
+
+func TestTamperDetected(t *testing.T) {
+	_, s := setup(t)
+	ctx := context.Background()
+	if _, _, err := s.Save(ctx, sample, 0); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(s.File())
+	// Push the expiry in the clear header one year out.
+	raw = []byte(strings.Replace(string(raw), `"expires":"20`, `"expires":"21`, 1))
+	_ = os.WriteFile(s.File(), raw, 0o600)
+	if _, _, err := s.Load(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("want ErrStale, got %v", err)
+	}
+}
