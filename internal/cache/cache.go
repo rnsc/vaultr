@@ -59,6 +59,8 @@ type Header struct {
 	// KeyRef names the cubbyhole entry holding the data key. Empty when the
 	// token could not write to its cubbyhole (token-only mode).
 	KeyRef string `json:"key_ref,omitempty"`
+	// TokenNamespace is where the token (and so the cubbyhole) lives.
+	TokenNamespace string `json:"token_namespace,omitempty"`
 }
 
 // Bound reports whether the cache is bound to server-side key material.
@@ -93,6 +95,8 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 		Created:   ti.ServerTime.UTC(),
 		Expires:   ti.ServerTime.Add(maxAge).UTC(),
 		Salt:      randBytes(32),
+
+		TokenNamespace: ti.Namespace,
 	}
 	if !ti.ExpireTime.IsZero() && ti.ExpireTime.Before(h.Expires) {
 		h.Expires = ti.ExpireTime.UTC()
@@ -100,13 +104,13 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 
 	// Drop the previous data key, if any.
 	if old, err := s.peek(); err == nil && old.KeyRef != "" {
-		_ = s.Client.Delete(ctx, cubbyPrefix+old.KeyRef)
+		_ = s.Client.TokenDelete(ctx, cubbyPrefix+old.KeyRef)
 	}
 
 	var warning string
 	dek := randBytes(32)
 	ref := hex.EncodeToString(randBytes(16))
-	_, err = s.Client.Write(ctx, cubbyPrefix+ref, map[string]string{
+	_, err = s.Client.TokenWrite(ctx, cubbyPrefix+ref, map[string]string{
 		"k":       base64.StdEncoding.EncodeToString(dek),
 		"expires": h.Expires.Format(time.RFC3339),
 	})
@@ -172,8 +176,9 @@ func (s *Store) Load(ctx context.Context) ([]index.Entry, Header, error) {
 
 	var dek []byte
 	var now time.Time
+	s.Client.HintTokenNamespace(h.TokenNamespace)
 	if h.KeyRef != "" {
-		resp, err := s.Client.Read(ctx, cubbyPrefix+h.KeyRef)
+		resp, err := s.Client.TokenRead(ctx, cubbyPrefix+h.KeyRef)
 		switch {
 		case errors.Is(err, vault.ErrNotFound):
 			s.removeFile()
@@ -255,7 +260,7 @@ func (s *Store) Purge(ctx context.Context) error {
 
 func (s *Store) destroy(ctx context.Context, h Header) {
 	if h.KeyRef != "" {
-		_ = s.Client.Delete(ctx, cubbyPrefix+h.KeyRef)
+		_ = s.Client.TokenDelete(ctx, cubbyPrefix+h.KeyRef)
 	}
 	s.removeFile()
 }

@@ -493,3 +493,12 @@ func TestHighlight(t *testing.T) {
 		}
 	}
 }
+
+func TestNamespaceInStatusLine(t *testing.T) {
+	c := fakeVault(t, testSecrets)
+	c.Namespace = "team-a"
+	m := newTest(t, Options{Entries: testEntries, Client: c})
+	if !strings.Contains(plain(m.View()), "ns team-a · 7/7") {
+		t.Errorf("namespace not shown:\n%s", plain(m.View()))
+	}
+}

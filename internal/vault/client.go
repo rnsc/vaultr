@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,22 +27,36 @@ var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("permission denied")
 
 // Client talks to a single Vault server with a single token.
+//
+// Namespace is where secrets are read. The token itself may live in a
+// different (usually parent) namespace, e.g. after logging in at the root
+// namespace and working in a team namespace. Token-scoped calls (lookup,
+// cubbyhole) go to the token's own namespace, detected on first use unless
+// set explicitly.
 type Client struct {
 	Addr      string
 	Namespace string
 	token     string
 	http      *http.Client
+
+	mu        sync.Mutex
+	tokenNS   string
+	tokenNSOK bool   // tokenNS is known
+	tokenNSBy string // how it was determined
 }
 
 // Config holds connection settings.
 type Config struct {
-	Addr       string
-	Token      string
-	Namespace  string
-	CACert     string
-	ClientCert string
-	ClientKey  string
-	SkipVerify bool
+	Addr      string
+	Token     string
+	Namespace string
+	// TokenNamespace is the namespace the token was issued in. Nil means
+	// detect it; "" is the root namespace.
+	TokenNamespace *string
+	CACert         string
+	ClientCert     string
+	ClientKey      string
+	SkipVerify     bool
 }
 
 // New builds a client from a config.
@@ -74,12 +89,16 @@ func New(cfg Config) (*Client, error) {
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   true,
 	}
-	return &Client{
+	c := &Client{
 		Addr:      strings.TrimRight(cfg.Addr, "/"),
 		Namespace: strings.Trim(cfg.Namespace, "/"),
 		token:     cfg.Token,
 		http:      &http.Client{Transport: tr, Timeout: 30 * time.Second},
-	}, nil
+	}
+	if cfg.TokenNamespace != nil {
+		c.tokenNS, c.tokenNSOK, c.tokenNSBy = strings.Trim(*cfg.TokenNamespace, "/"), true, "configured"
+	}
+	return c, nil
 }
 
 // Token returns the token in use.
@@ -96,6 +115,10 @@ type Response struct {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) (*Response, error) {
+	return c.doIn(ctx, c.Namespace, method, path, query, body)
+}
+
+func (c *Client) doIn(ctx context.Context, ns, method, path string, query url.Values, body any) (*Response, error) {
 	u := c.Addr + "/v1/" + escapePath(strings.TrimLeft(path, "/"))
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -114,8 +137,8 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	req.Header.Set("X-Vault-Token", c.token)
 	req.Header.Set("X-Vault-Request", "true")
-	if c.Namespace != "" {
-		req.Header.Set("X-Vault-Namespace", c.Namespace)
+	if ns != "" {
+		req.Header.Set("X-Vault-Namespace", ns)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -309,23 +332,26 @@ type TokenInfo struct {
 	Accessor   string
 	ExpireTime time.Time // zero for non-expiring tokens
 	ServerTime time.Time
+	Namespace  string // namespace the token belongs to ("" = root)
 }
 
-// LookupSelf validates the token and returns its expiry.
-func (c *Client) LookupSelf(ctx context.Context) (TokenInfo, error) {
-	resp, err := c.Read(ctx, "auth/token/lookup-self")
+type lookupData struct {
+	Accessor      string  `json:"accessor"`
+	ExpireTime    *string `json:"expire_time"`
+	TTL           int64   `json:"ttl"`
+	NamespacePath *string `json:"namespace_path"`
+}
+
+func (c *Client) lookupIn(ctx context.Context, ns string) (TokenInfo, *string, error) {
+	resp, err := c.doIn(ctx, ns, http.MethodGet, "auth/token/lookup-self", nil, nil)
 	if err != nil {
-		return TokenInfo{}, fmt.Errorf("token lookup: %w", err)
+		return TokenInfo{}, nil, fmt.Errorf("token lookup: %w", err)
 	}
-	var d struct {
-		Accessor   string  `json:"accessor"`
-		ExpireTime *string `json:"expire_time"`
-		TTL        int64   `json:"ttl"`
-	}
+	var d lookupData
 	if err := json.Unmarshal(resp.Data, &d); err != nil {
-		return TokenInfo{}, err
+		return TokenInfo{}, nil, err
 	}
-	ti := TokenInfo{Accessor: d.Accessor, ServerTime: resp.ServerTime}
+	ti := TokenInfo{Accessor: d.Accessor, ServerTime: resp.ServerTime, Namespace: ns}
 	if ti.ServerTime.IsZero() {
 		ti.ServerTime = time.Now()
 	}
@@ -337,7 +363,125 @@ func (c *Client) LookupSelf(ctx context.Context) (TokenInfo, error) {
 	if ti.ExpireTime.IsZero() && d.TTL > 0 {
 		ti.ExpireTime = ti.ServerTime.Add(time.Duration(d.TTL) * time.Second)
 	}
-	return ti, nil
+	return ti, d.NamespacePath, nil
+}
+
+// LookupSelf validates the token and returns its expiry. On first use it
+// also determines the token's namespace: the server's namespace_path when
+// reported, else the root namespace if the token is valid there, else the
+// secrets namespace.
+func (c *Client) LookupSelf(ctx context.Context) (TokenInfo, error) {
+	c.mu.Lock()
+	known, ns := c.tokenNSOK, c.tokenNS
+	c.mu.Unlock()
+	if known {
+		ti, _, err := c.lookupIn(ctx, ns)
+		return ti, err
+	}
+
+	candidates := []string{""}
+	if c.Namespace != "" {
+		candidates = append(candidates, c.Namespace)
+	}
+	var firstErr error
+	for _, cand := range candidates {
+		ti, reported, err := c.lookupIn(ctx, cand)
+		if err != nil {
+			if firstErr == nil || !errors.Is(err, ErrForbidden) {
+				firstErr = err
+			}
+			if errors.Is(err, ErrForbidden) {
+				continue
+			}
+			return TokenInfo{}, err
+		}
+		by := "detected"
+		if reported != nil {
+			ti.Namespace, by = strings.Trim(*reported, "/"), "reported by server"
+		}
+		c.mu.Lock()
+		c.tokenNS, c.tokenNSOK, c.tokenNSBy = ti.Namespace, true, by
+		c.mu.Unlock()
+		return ti, nil
+	}
+	return TokenInfo{}, firstErr
+}
+
+// TokenNamespace returns the token's namespace, detecting it if needed,
+// and how it was determined.
+func (c *Client) TokenNamespace(ctx context.Context) (string, string, error) {
+	c.mu.Lock()
+	if c.tokenNSOK {
+		defer c.mu.Unlock()
+		return c.tokenNS, c.tokenNSBy, nil
+	}
+	c.mu.Unlock()
+	ti, err := c.LookupSelf(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return ti.Namespace, c.tokenNSBy, nil
+}
+
+// HintTokenNamespace records a previously detected token namespace (e.g.
+// from the cache header) so detection can be skipped. It never overrides
+// a configured or already detected value.
+func (c *Client) HintTokenNamespace(ns string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.tokenNSOK {
+		c.tokenNS, c.tokenNSOK, c.tokenNSBy = ns, true, "cached"
+	}
+}
+
+// TokenRead, TokenWrite, TokenDelete and TokenList act in the token's own
+// namespace (for its cubbyhole).
+func (c *Client) TokenRead(ctx context.Context, path string) (*Response, error) {
+	ns, _, err := c.TokenNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.doIn(ctx, ns, http.MethodGet, path, nil, nil)
+}
+
+// TokenWrite writes in the token's namespace.
+func (c *Client) TokenWrite(ctx context.Context, path string, body any) (*Response, error) {
+	ns, _, err := c.TokenNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.doIn(ctx, ns, http.MethodPost, path, nil, body)
+}
+
+// TokenDelete deletes in the token's namespace.
+func (c *Client) TokenDelete(ctx context.Context, path string) error {
+	ns, _, err := c.TokenNamespace(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.doIn(ctx, ns, http.MethodDelete, path, nil, nil)
+	return err
+}
+
+// TokenList lists in the token's namespace.
+func (c *Client) TokenList(ctx context.Context, path string) ([]string, error) {
+	ns, _, err := c.TokenNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doIn(ctx, ns, http.MethodGet, path, url.Values{"list": {"true"}}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var d struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(resp.Data, &d); err != nil {
+		return nil, err
+	}
+	return d.Keys, nil
 }
 
 // Stringify renders secret values as strings; non-strings become JSON.

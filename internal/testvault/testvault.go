@@ -346,6 +346,10 @@ func (f *Fixture) Teardown(ctx context.Context) {
 // support them (Vault Enterprise, OpenBao).
 type Namespaces struct {
 	Parent, Child string // e.g. "it1234-ns", "it1234-ns/child"
+	// RootPolicy is a policy in the root namespace granting read/list on
+	// both namespaces' secret/ mounts: the "log in at the root, work in a
+	// team namespace" setup.
+	RootPolicy string
 	// Secrets per namespace, in a KV v2 mount named "secret/".
 	Secrets map[string][]Secret
 	admin   *Admin
@@ -357,7 +361,7 @@ var ErrNoNamespaces = fmt.Errorf("server does not support namespaces")
 // ProvisionNamespaces creates <prefix>-ns and <prefix>-ns/child, each with
 // a KV v2 mount at secret/, a few secrets and a "reader" policy.
 func ProvisionNamespaces(ctx context.Context, admin *Admin, prefix string) (*Namespaces, error) {
-	n := &Namespaces{Parent: prefix + "-ns", Child: prefix + "-ns/child", admin: admin, Secrets: map[string][]Secret{}}
+	n := &Namespaces{Parent: prefix + "-ns", Child: prefix + "-ns/child", RootPolicy: prefix + "-ns-reader", admin: admin, Secrets: map[string][]Secret{}}
 	if _, err := admin.write(ctx, "sys/namespaces/"+n.Parent, map[string]any{}); err != nil {
 		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "unsupported path") {
 			return nil, ErrNoNamespaces
@@ -391,6 +395,12 @@ func ProvisionNamespaces(ctx context.Context, admin *Admin, prefix string) (*Nam
 			}
 		}
 	}
+	if _, err := admin.write(ctx, "sys/policies/acl/"+n.RootPolicy, map[string]string{"policy": fmt.Sprintf(`
+path "%[1]s/secret/*" { capabilities = ["read", "list"] }
+path "%[2]s/secret/*" { capabilities = ["read", "list"] }
+`, n.Parent, n.Child)}); err != nil {
+		return nil, fmt.Errorf("root policy: %w", err)
+	}
 	return n, nil
 }
 
@@ -410,6 +420,7 @@ func (n *Namespaces) Teardown(ctx context.Context) {
 	waitGone(ctx, parent, "child/")
 	_ = n.admin.delete(ctx, "sys/namespaces/"+n.Parent)
 	waitGone(ctx, n.admin, n.Parent+"/")
+	_ = n.admin.delete(ctx, "sys/policies/acl/"+n.RootPolicy)
 }
 
 func waitGone(ctx context.Context, a *Admin, name string) {

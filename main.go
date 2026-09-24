@@ -414,6 +414,12 @@ func (a *app) status(ctx context.Context) error {
 	fmt.Printf("server:   %s\n", a.client.Addr)
 	if a.client.Namespace != "" {
 		fmt.Printf("namespace: %s\n", a.client.Namespace)
+		if tns, by, err := a.client.TokenNamespace(ctx); err == nil {
+			if tns == "" {
+				tns = "(root)"
+			}
+			fmt.Printf("token ns: %s (%s)\n", tns, by)
+		}
 	}
 	fmt.Printf("file:     %s\n", a.store.File())
 	h, err := a.store.Status()

@@ -22,17 +22,20 @@ const MaxAge = cache.MaxAge
 
 // File is the on-disk config format.
 type File struct {
-	Address    string   `toml:"address"`
-	Namespace  string   `toml:"namespace"`
-	CACert     string   `toml:"ca_cert"`
-	ClientCert string   `toml:"client_cert"`
-	ClientKey  string   `toml:"client_key"`
-	Mounts     []string `toml:"mounts"`
-	Workers    int      `toml:"workers"`
-	MaxAge     string   `toml:"max_age"`
-	PathsOnly  bool     `toml:"paths_only"`
-	ClipClear  string   `toml:"clip_clear"`
-	CacheDir   string   `toml:"cache_dir"`
+	Address   string `toml:"address"`
+	Namespace string `toml:"namespace"`
+	// TokenNamespace is where the token was issued, when it differs from
+	// Namespace and auto-detection is not wanted.
+	TokenNamespace *string  `toml:"token_namespace"`
+	CACert         string   `toml:"ca_cert"`
+	ClientCert     string   `toml:"client_cert"`
+	ClientKey      string   `toml:"client_key"`
+	Mounts         []string `toml:"mounts"`
+	Workers        int      `toml:"workers"`
+	MaxAge         string   `toml:"max_age"`
+	PathsOnly      bool     `toml:"paths_only"`
+	ClipClear      string   `toml:"clip_clear"`
+	CacheDir       string   `toml:"cache_dir"`
 }
 
 // Settings are the resolved values.
@@ -59,9 +62,15 @@ const Template = `# vaultr configuration. Environment variables take precedence 
 # Vault server. Overridden by VAULT_ADDR (or VAULT_URL).
 # address = "https://vault.example.com"
 
-# Default namespace (Vault Enterprise / OpenBao). Overridden by
-# VAULT_NAMESPACE; set VAULT_NAMESPACE=/ to force the root namespace.
+# Namespace holding your secrets (Vault Enterprise / OpenBao). Overridden
+# by VAULT_NAMESPACE; set VAULT_NAMESPACE=/ to force the root namespace.
 # namespace = "team-a"
+
+# Namespace your token was issued in, when you log in somewhere else than
+# the secrets namespace (e.g. login at the root, secrets in "team-a").
+# Detected automatically; set it only if detection picks the wrong one.
+# "/" or "" is the root namespace. Overridden by VAULTR_TOKEN_NAMESPACE.
+# token_namespace = "/"
 
 # TLS. Overridden by VAULT_CACERT, VAULT_CLIENT_CERT, VAULT_CLIENT_KEY.
 # ca_cert = "/etc/ssl/vault-ca.pem"
@@ -169,6 +178,16 @@ func Load() (*Settings, error) {
 	pick("address", &v.Addr, []string{"VAULT_ADDR", "VAULT_URL"}, f.Address, "https://127.0.0.1:8200")
 	pick("namespace", &v.Namespace, []string{"VAULT_NAMESPACE"}, f.Namespace, "")
 	v.Namespace = strings.Trim(v.Namespace, "/") // "/" means root
+	switch e := os.Getenv("VAULTR_TOKEN_NAMESPACE"); {
+	case e != "":
+		t := strings.Trim(e, "/")
+		v.TokenNamespace, s.Source["token_namespace"] = &t, "env VAULTR_TOKEN_NAMESPACE"
+	case f.TokenNamespace != nil:
+		t := strings.Trim(*f.TokenNamespace, "/")
+		v.TokenNamespace, s.Source["token_namespace"] = &t, "config"
+	default:
+		s.Source["token_namespace"] = "auto-detect"
+	}
 	pick("ca_cert", &v.CACert, []string{"VAULT_CACERT"}, f.CACert, "")
 	pick("client_cert", &v.ClientCert, []string{"VAULT_CLIENT_CERT"}, f.ClientCert, "")
 	pick("client_key", &v.ClientKey, []string{"VAULT_CLIENT_KEY"}, f.ClientKey, "")
@@ -311,6 +330,7 @@ func (s *Settings) Describe() string {
 	rows := [][2]string{
 		{"address", s.Vault.Addr},
 		{"namespace", ns},
+		{"token_namespace", tokenNS(s)},
 		{"token", token},
 		{"ca_cert", s.Vault.CACert},
 		{"client_cert", s.Vault.ClientCert},
@@ -330,4 +350,14 @@ func (s *Settings) Describe() string {
 		fmt.Fprintf(&b, "%-12s %-40s %s\n", r[0], r[1], "("+src+")")
 	}
 	return b.String()
+}
+
+func tokenNS(s *Settings) string {
+	switch {
+	case s.Vault.TokenNamespace == nil:
+		return "(auto)"
+	case *s.Vault.TokenNamespace == "":
+		return "(root)"
+	}
+	return *s.Vault.TokenNamespace
 }

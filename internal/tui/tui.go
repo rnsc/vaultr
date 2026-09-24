@@ -519,6 +519,9 @@ func (m model) statusLine() string {
 		total = len(m.ix.Rows)
 	}
 	s := fmt.Sprintf("%d/%d", len(m.results), total)
+	if ns := m.opt.Client.Namespace; ns != "" {
+		s = "ns " + ns + " · " + s
+	}
 	if !m.header.Expires.IsZero() {
 		left := time.Until(m.header.Expires).Round(time.Minute)
 		s += fmt.Sprintf(" · cache expires in %s", left)
