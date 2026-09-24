@@ -35,11 +35,19 @@ type Options struct {
 	ClipClear time.Duration
 }
 
+// Clipboard access, swappable in tests.
+var (
+	writeClipboard = clipboard.WriteAll
+	readClipboard  = clipboard.ReadAll
+)
+
 // Run starts the TUI.
 func Run(opt Options) error {
-	m := newModel(opt)
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
-	return err
+	final, err := tea.NewProgram(newModel(opt), tea.WithAltScreen()).Run()
+	if err != nil {
+		return err
+	}
+	return final.(model).fatal
 }
 
 var (
@@ -87,6 +95,7 @@ type model struct {
 
 	detail   detailState
 	initCmd  tea.Cmd
+	fatal    error
 	flash    string
 	flashErr bool
 }
@@ -120,10 +129,7 @@ type (
 		err   error
 	}
 	clipClearMsg struct{ value string }
-	flashMsg     struct {
-		text string
-		err  bool
-	}
+	flashMsg     struct{ text string }
 )
 
 func newModel(opt Options) model {
@@ -206,7 +212,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		if msg.err != nil {
 			if m.ix == nil {
-				return m, tea.Sequence(tea.Println("vaultr: index build failed: "+msg.err.Error()), tea.Quit)
+				m.fatal = fmt.Errorf("building index: %w", msg.err)
+				return m, tea.Quit
 			}
 			m.mode = modeList
 			return m, m.setFlash("rebuild failed: "+msg.err.Error(), true)
@@ -249,8 +256,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.copy(msg.label, msg.value)
 	case clipClearMsg:
-		if cur, err := clipboard.ReadAll(); err == nil && cur == msg.value {
-			_ = clipboard.WriteAll("")
+		if cur, err := readClipboard(); err == nil && cur == msg.value {
+			_ = writeClipboard("")
 		}
 		return m, nil
 	case flashMsg:
@@ -390,7 +397,7 @@ func (m model) selected() (search.Row, bool) {
 }
 
 func (m model) listHeight() int {
-	h := m.height - 4 // input, separator, status, help
+	h := m.height - 3 // input, status, help
 	if h < 1 {
 		h = 1
 	}
@@ -430,7 +437,7 @@ func (m model) fetchAndCopy(row search.Row) tea.Cmd {
 }
 
 func (m *model) copy(label, value string) tea.Cmd {
-	err := clipboard.WriteAll(value)
+	err := writeClipboard(value)
 	native := err == nil
 	if err != nil {
 		// No native clipboard (headless, SSH): fall back to OSC 52.

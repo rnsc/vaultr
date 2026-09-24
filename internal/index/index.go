@@ -35,8 +35,8 @@ type Progress struct {
 type Options struct {
 	Mounts     []vault.Mount
 	Workers    int
-	PathsOnly  bool // skip reading secrets, index paths only
-	OnProgress func(Progress)
+	PathsOnly  bool           // skip reading secrets, index paths only
+	OnProgress func(Progress) // never called concurrently
 }
 
 // Result of a crawl.
@@ -75,11 +75,15 @@ type builder struct {
 	entries []Entry
 	errs    []error
 
-	prog struct{ secrets, lists, denied atomic.Int64 }
+	prog     struct{ secrets, lists, denied atomic.Int64 }
+	reportMu sync.Mutex
 }
 
+// report calls OnProgress, never concurrently and with monotonic counts.
 func (b *builder) report() {
 	if b.opt.OnProgress != nil {
+		b.reportMu.Lock()
+		defer b.reportMu.Unlock()
 		b.opt.OnProgress(Progress{
 			Secrets: b.prog.secrets.Load(),
 			Lists:   b.prog.lists.Load(),

@@ -132,7 +132,7 @@ type Response struct {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) (*Response, error) {
-	u := c.Addr + "/v1/" + strings.TrimLeft(path, "/")
+	u := c.Addr + "/v1/" + escapePath(strings.TrimLeft(path, "/"))
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -183,6 +183,16 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return out, fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.Join(out.Errors, "; "))
 	}
 	return out, nil
+}
+
+// escapePath escapes each segment so names containing '#', '?', '%' or
+// spaces reach Vault intact.
+func escapePath(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
 }
 
 // Read performs a GET and returns the response.
