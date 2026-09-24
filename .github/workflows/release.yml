@@ -3,8 +3,10 @@ name: release
 # Releases are cut automatically when CI passes on main after a merge. The
 # bump comes from the merge commit message (see scripts/next-version.sh):
 # patch by default, "feat:" or [minor] for minor, "!:" / BREAKING CHANGE /
-# [major] for major, [skip release] for none. You can also push a vX.Y.Z tag
-# yourself, or run this workflow by hand and pick the bump.
+# [major] for major, [skip release] for none. Merges that change nothing
+# shipped (docs, tests, CI) don't release unless the message says
+# [release]. You can also push a vX.Y.Z tag yourself, or run this workflow
+# by hand and pick the bump (that always releases).
 on:
   workflow_run:
     workflows: [ci]
@@ -61,10 +63,13 @@ jobs:
             echo "create=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tag="$(scripts/next-version.sh "$BUMP")"
+          tag="$(scripts/next-version.sh "$BUMP" 2>"$RUNNER_TEMP/why")"
+          cat "$RUNNER_TEMP/why" >&2
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "create=true" >> "$GITHUB_OUTPUT"
-          if [ -z "$tag" ]; then echo "No release for this commit." >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -z "$tag" ]; then
+            echo "No release for this commit: $(cat "$RUNNER_TEMP/why")" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Check the Homebrew tap key
         if: steps.version.outputs.tag != ''

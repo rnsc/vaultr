@@ -451,6 +451,11 @@ PR title and description:
 | `feat!: ...`, `BREAKING CHANGE`, or `[major]`           | major, v**1**.0.0  |
 | `[skip release]`                                        | none               |
 
+A merge releases only when something users download changed since the last
+release: Go code (not tests), `go.mod`/`go.sum`, the completion scripts or
+`.goreleaser.yaml`. Docs, tests and CI changes alone don't, unless the
+message says `[release]`. `scripts/next-version.sh` holds the list.
+
 The first release is `v0.1.0`. You can also release by hand: push a
 `vX.Y.Z` tag, or run the **release** workflow from the Actions tab and pick
 the bump.

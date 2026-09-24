@@ -9,10 +9,31 @@
 #   [major], "BREAKING CHANGE", "feat!:"   major bump
 #   [minor], a line starting "feat:"       minor bump
 #   anything else                          patch bump
-# The first release is v0.1.0. Nothing is printed if HEAD is already tagged.
+# and releases only when something shipped changed since the last release
+# (see shipped below); "[release]" in the message releases anyway. An
+# explicit bump always releases. The first release is v0.1.0. Nothing is
+# printed if HEAD is already tagged.
+#
+#   scripts/next-version.sh shipped < paths
+#
+# prints which of the paths on stdin (one per line) end up in what users
+# download: the binary, the archives or the Homebrew cask.
 set -euo pipefail
 
 mode="${1:-auto}"
+
+# shipped filters paths to those that change a release. Keep it in sync
+# with what the build reads: Go code (not tests or test helpers), modules,
+# the completion scripts embedded in the binary and GoReleaser's config.
+shipped() {
+  grep -E '\.go$|^go\.(mod|sum)$|^\.goreleaser\.yaml$|^internal/complete/shells/' |
+    grep -vE '_test\.go$|^integration/|^internal/testvault/|^tools/|\.md$' || true
+}
+
+if [[ "$mode" == shipped ]]; then
+  shipped
+  exit 0
+fi
 
 if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "HEAD is already released as $(git tag --points-at HEAD | head -1)" >&2
@@ -35,6 +56,12 @@ if [[ "$mode" == auto ]]; then
 fi
 
 last="$(git tag --list 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+if [[ -n "$last" && "${1:-auto}" == auto ]] && ! grep -qiF '[release]' <<<"$msg"; then
+  if [[ -z "$(git diff --name-only "$last" HEAD | shipped)" ]]; then
+    echo "nothing shipped changed since $last (docs, tests or CI only); add [release] to the commit message to release anyway" >&2
+    exit 0
+  fi
+fi
 if [[ -z "$last" ]]; then
   echo "v0.1.0"
   exit 0
