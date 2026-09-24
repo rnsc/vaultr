@@ -5,6 +5,7 @@ project_name: vaultr
 before:
   hooks:
     - go mod download
+    - sh -c 'mkdir -p completions && for sh in $(go run . completion list); do go run . completion $sh > completions/vaultr.$sh; done'
 
 builds:
   - id: vaultr
@@ -34,6 +35,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - completions/*
 
 checksum:
   name_template: SHA256SUMS

@@ -9,8 +9,10 @@ Set Width 1040
 Set Height 540
 Set Padding 16
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 55ms
+Set TypingSpeed 75ms
 Set Framerate 24
+# Slower than real time so it is easy to follow.
+Set PlaybackSpeed 0.7
 
 Hide
 Type "export PS1='$ ' && vaultr index >/dev/null 2>&1 && vault kv put secret/teams/web/sentry dsn=https://demo@sentry.example/1 >/dev/null && clear"
