@@ -22,6 +22,7 @@ import (
 
 	"github.com/rnsc/vaultr/internal/auth"
 	"github.com/rnsc/vaultr/internal/cache"
+	"github.com/rnsc/vaultr/internal/complete"
 	"github.com/rnsc/vaultr/internal/config"
 	"github.com/rnsc/vaultr/internal/index"
 	"github.com/rnsc/vaultr/internal/search"
@@ -48,6 +49,9 @@ Usage:
   vaultr login [flags]           log in (oidc, ldap, userpass, token) and
                                  save the token to ~/.vault-token
   vaultr config [show|path|init] show settings, or write a config template
+  vaultr completion install      set up tab completion for your shell
+  vaultr completion SHELL        print the completion script (see
+                                 vaultr completion list)
   vaultr version
 
 Query syntax: space separated terms, all must match (case-insensitive
@@ -101,6 +105,11 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	case "config":
 		return configCmd(args[1:])
+	case "completion":
+		return completionCmd(args[1:])
+	case "__complete":
+		completeCmd(ctx, args[1:])
+		return nil
 	}
 
 	refresh := false
@@ -724,3 +733,66 @@ func tableWriter() interface {
 type nopFlusher struct{ io.Writer }
 
 func (nopFlusher) Flush() error { return nil }
+
+func completionCmd(args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "":
+		return fmt.Errorf("usage: vaultr completion install [SHELL], or vaultr completion SHELL to print the script (shells: %s)",
+			strings.Join(complete.ShellNames(), ", "))
+	case "list":
+		for _, n := range complete.ShellNames() {
+			fmt.Println(n)
+		}
+		return nil
+	case "install":
+		shell := ""
+		if len(args) > 1 {
+			shell = args[1]
+		} else {
+			var err error
+			if shell, err = complete.DetectShell(); err != nil {
+				return err
+			}
+		}
+		msg, err := complete.Install(shell)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, msg)
+		return nil
+	}
+	script, err := complete.Script(sub)
+	if err != nil {
+		return err
+	}
+	fmt.Print(script)
+	return nil
+}
+
+// completeCmd prints completion candidates for the words typed after
+// "vaultr" (the last one being completed), one per line. It is called by
+// the shell scripts on every tab, so it is quiet: any problem (no token,
+// server unreachable) just means fewer or no candidates.
+func completeCmd(ctx context.Context, words []string) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for i := range words {
+		words[i] = complete.Unescape(words[i])
+	}
+	var sources []complete.Source
+	if a, err := newApp(false); err == nil && a.client.Token() != "" {
+		// The cache first (instant, and has key names); then Vault itself
+		// for secrets added since, or when there is no valid cache.
+		if entries, _, err := a.store.Load(ctx); err == nil {
+			sources = append(sources, complete.IndexSource{Entries: entries})
+		}
+		sources = append(sources, &complete.LiveSource{Client: a.client, Mounts: a.mounts})
+	}
+	for _, c := range complete.Candidates(ctx, sources, words) {
+		fmt.Println(c)
+	}
+}

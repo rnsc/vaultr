@@ -64,6 +64,41 @@ vaultr status                   # cache age, expiry, binding
 vaultr purge                    # delete cache and its key
 ```
 
+### Tab completion
+
+```sh
+vaultr completion install   # detects your shell from $SHELL (bash, zsh, fish)
+```
+
+Open a new shell, then:
+
+```
+$ vaultr get secret/pr<TAB>              ->  vaultr get secret/prod/
+$ vaultr get secret/prod/<TAB><TAB>      ->  db/  payments/  ...
+$ vaultr get secret/prod/db/postgres p<TAB>  ->  password  port
+```
+
+Commands, flags and `login -method` values complete too.
+
+- **Where candidates come from:** paths and key names come from the local
+  index when it's valid, which is instant. With no index, an expired one, or
+  nothing matching (a secret added after the index was built), vaultr lists
+  just that folder live in Vault instead. Completion never builds the full
+  index.
+- **When it can't complete paths:** with no token, an expired one, or an
+  unreachable server, you still get commands and flags. Paths just don't
+  complete, and nothing is printed to your terminal.
+- **What install changes:** bash and zsh get one line in `~/.bashrc` or
+  `~/.zshrc` that loads `vaultr completion <shell>` at startup, so it always
+  matches the installed vaultr. fish gets
+  `~/.config/fish/completions/vaultr.fish`. Running install again changes
+  nothing.
+- **Setting it up yourself:** print the script with
+  `vaultr completion bash|zsh|fish`. Release archives also include the
+  scripts in `completions/`.
+
+Another shell? See [Contributing](#contributing).
+
 ### Query syntax
 
 | Query              | Matches                                                     |
@@ -383,3 +418,10 @@ PR title and description:
 The first release is `v0.1.0`. You can also release by hand: push a
 `vX.Y.Z` tag, or run the **release** workflow from the Actions tab and pick
 the bump.
+
+## Contributing
+
+Adding completion for another shell takes one script and one registry
+entry. [`internal/complete/shells/README.md`](internal/complete/shells/README.md)
+explains the (small) contract and the steps. The tests check every
+registered shell automatically.
