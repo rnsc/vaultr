@@ -21,12 +21,12 @@ jobs:
   gifs:
     # Only for branches of this repository (a fork's token cannot push).
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       BRANCH: ${{ github.head_ref || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.BRANCH }}
 
@@ -42,7 +42,7 @@ jobs:
             echo "stale=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.check.outputs.stale == 'true'
         with:
           go-version: stable
@@ -59,7 +59,7 @@ jobs:
         if: steps.check.outputs.stale == 'true'
         run: scripts/demo.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.check.outputs.stale == 'true'
         with:
           name: demo-gifs
@@ -84,20 +84,25 @@ jobs:
             echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          additions='[]'
+          # Everything goes through files: the base64 GIFs are far larger
+          # than the command-line argument limit.
+          echo '[]' > "$RUNNER_TEMP/additions.json"
           for f in "${changed[@]}"; do
             base64 -w0 "$f" > "$RUNNER_TEMP/b64"
-            additions="$(jq --arg path "$f" --rawfile contents "$RUNNER_TEMP/b64" \
-              '. + [{path: $path, contents: $contents}]' <<<"$additions")"
+            jq --arg path "$f" --rawfile contents "$RUNNER_TEMP/b64" \
+              '. + [{path: $path, contents: $contents}]' \
+              "$RUNNER_TEMP/additions.json" > "$RUNNER_TEMP/additions.next"
+            mv "$RUNNER_TEMP/additions.next" "$RUNNER_TEMP/additions.json"
           done
           jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH" \
-            --arg head "$(git rev-parse HEAD)" --argjson additions "$additions" '{
+            --arg head "$(git rev-parse HEAD)" \
+            --slurpfile additions "$RUNNER_TEMP/additions.json" '{
               query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
               variables: { input: {
                 branch: { repositoryNameWithOwner: $repo, branchName: $branch },
                 expectedHeadOid: $head,
                 message: { headline: "Update demo GIFs" },
-                fileChanges: { additions: $additions }
+                fileChanges: { additions: $additions[0] }
               } }
             }' > "$RUNNER_TEMP/commit.json"
           url="$(gh api graphql --input "$RUNNER_TEMP/commit.json" --jq '.data.createCommitOnBranch.commit.url')"
