@@ -62,7 +62,10 @@ backend (`internal/tui/backend_test.go`) and pty tests in
 - **Merging to main releases.** The merge commit message sets the bump:
   `feat:` or `[minor]` for minor, `!:` / `BREAKING CHANGE` / `[major]`
   for major, `[skip release]` for none, patch otherwise
-  (`scripts/next-version.sh`). GoReleaser builds darwin/arm64, linux
+  (`scripts/next-version.sh`). Only merges that change what users
+  download release: Go code (not tests), modules, completion scripts,
+  `.goreleaser.yaml`; `[release]` forces one. If you add a file that ends
+  up in the binary or archives, add it to `shipped` in that script. GoReleaser builds darwin/arm64, linux
   amd64/arm64 and windows/amd64 and updates the Homebrew cask in
   `rnsc/homebrew-tap`.
 - **Commit as the maintainer:** no `Co-Authored-By` or session-link
