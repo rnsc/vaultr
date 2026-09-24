@@ -1,0 +1,130 @@
+# vaultr
+
+Fast keyword search over HashiCorp Vault KV secrets. It searches every
+path and every key name across all KV mounts. Values are fetched live, only
+when you ask for them.
+
+- **Recursive index** of every KV v1/v2 mount the token can see (concurrent crawl).
+- **Instant search**: all terms must match a path or a key name. `k:` / `p:` limit a term to keys or paths.
+- **TUI** for browsing and copying. The **CLI** (`find`, `get`) works for scripts and pipes.
+- **Encrypted, time-bombed local cache** holding paths and key names only. It never stores values.
+
+## Install
+
+```sh
+go install github.com/rnsc/vaultr@latest
+```
+
+## Usage
+
+```sh
+export VAULT_ADDR=https://vault.example.com
+vault login -method=oidc        # or VAULT_TOKEN=...
+
+vaultr                          # interactive search
+vaultr prod db                  # interactive, pre-filled query
+vaultr find stripe k:key        # print "path<TAB>key" lines (exit 1 if none)
+vaultr find --values ldap       # also fetch the matching values
+vaultr find --json -n 20 redis  # JSON lines
+vaultr get secret/prod/db password
+vaultr index                    # force a rebuild
+vaultr status                   # cache age, expiry, binding
+vaultr purge                    # delete cache and its key
+```
+
+### Query syntax
+
+| Query              | Matches                                                     |
+|--------------------|-------------------------------------------------------------|
+| `stripe`           | any path or key name containing `stripe`                    |
+| `prod password`    | rows matching both terms (for example path has `prod`, key is `password`) |
+| `k:token`          | key names containing `token`                                |
+| `p:payments api`   | paths containing `payments`, with `api` in the path or key  |
+
+Matching is case-insensitive. Exact key names rank first, then key prefixes,
+then the last path segment.
+
+### TUI keys
+
+| List              |                        | Secret view          |                   |
+|-------------------|------------------------|----------------------|-------------------|
+| type              | filter                 | `↑` `↓`              | select key        |
+| `↑` `↓` / `^n` `^p` | move                 | `r` / space          | reveal / hide     |
+| `enter`           | open the secret        | `enter` / `c`        | copy value        |
+| `^y`              | copy the row's value   | `y`                  | copy path         |
+| `^o`              | copy the path          | `R`                  | reload            |
+| `^r`              | rebuild the index      | `esc`                | back              |
+| `esc` / `^c`      | quit                   |                      |                   |
+
+Copying uses the system clipboard (pbcopy, xclip, xsel, wl-copy). If none is
+available it falls back to OSC 52, which works over SSH in most terminals.
+Values copied to the system clipboard are cleared after 45s if still there.
+
+## Configuration
+
+Connection settings use the standard Vault variables: `VAULT_ADDR`,
+`VAULT_TOKEN` (or `~/.vault-token`), `VAULT_NAMESPACE`, `VAULT_CACERT`,
+`VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY`, `VAULT_SKIP_VERIFY`.
+
+| Variable            | Default        | Meaning                                                   |
+|---------------------|----------------|-----------------------------------------------------------|
+| `VAULTR_MOUNTS`     | discover       | Comma separated KV mounts to index, e.g. `secret,kv-team` |
+| `VAULTR_WORKERS`    | `32`           | Concurrent requests while indexing                        |
+| `VAULTR_MAX_AGE`    | `2h`           | Cache lifetime. Values above 2h are capped at 2h           |
+| `VAULTR_PATHS_ONLY` | `false`        | Index paths only. Faster, and needs no `read` permission, but you can't search key names |
+| `VAULTR_CLIP_CLEAR` | `45s`          | Clipboard auto-clear delay in the TUI (`0` disables)      |
+| `VAULTR_CACHE_DIR`  | user cache dir | Where the encrypted index lives                           |
+
+Mounts are discovered through `sys/internal/ui/mounts`, which any token can
+read (Vault filters the result by policy). If discovery fails, vaultr falls
+back to `sys/mounts`. Set `VAULTR_MOUNTS` to skip discovery.
+
+Paths the token can't list or read are skipped and counted as "denied".
+Paths that can be listed but not read are still indexed, just without key
+names.
+
+## Cache security
+
+The cache holds secret **paths and key names, never values**. It is written
+with mode `0600` to `$XDG_CACHE_HOME/vaultr/` (`~/Library/Caches/vaultr` on
+macOS). There is one file per Vault address and namespace.
+
+It is encrypted with AES-256-GCM, using a key derived with HKDF-SHA256 from:
+
+1. **the Vault token**, and
+2. **a random 256-bit data key stored in the token's cubbyhole**
+   (`cubbyhole/vaultr/<id>`).
+
+Vault deletes a token's cubbyhole when the token expires or is revoked. So
+once the token is gone, the data key is gone too, and nobody can decrypt the
+cache again. That includes someone who copied both the file and the old
+token. This is the time bomb, and Vault enforces it on the server, not the
+local machine.
+
+On top of that:
+
+- **Hard expiry.** Every cache expires 2 hours after it is built, or when
+  the token expires if that comes first. The expiry is stored in the file
+  header, which is authenticated, so editing it breaks decryption. It is
+  checked against the Vault server's `Date` header, so changing the local
+  clock does not extend it.
+- **Deleted when stale.** vaultr deletes the file and its cubbyhole key as
+  soon as it finds the cache expired, tampered with, or unreadable with the
+  current token. Then it rebuilds with the current token.
+- **One key per build.** Each rebuild gets a new salt and a new data key,
+  and deletes the old key.
+- **Fallback.** If the token's policy blocks writes to its cubbyhole (the
+  `default` policy allows them), the cache falls back to token-only
+  encryption plus the 2h expiry, and `vaultr status` reports it as
+  `token only`.
+
+## Development
+
+```sh
+go test ./...
+# Integration testing against a local dev server:
+vault server -dev -dev-root-token-id=root &
+export VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root
+vault kv put secret/prod/db username=app password=hunter2
+go run . find password
+```
