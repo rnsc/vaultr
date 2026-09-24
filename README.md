@@ -32,17 +32,14 @@ On macOS and Linux, the install script picks the right archive, checks it
 against `SHA256SUMS`, and installs it to `~/.local/bin`:
 
 ```sh
-# while the repository is private (needs the GitHub CLI, logged in):
-gh api repos/rnsc/vaultr/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
-# once it is public:
 curl -fsSL https://raw.githubusercontent.com/rnsc/vaultr/main/scripts/install.sh | bash
 # or, from a clone:
 scripts/install.sh [--version v0.1.0] [--dir /usr/local/bin]
 ```
 
 The macOS binary is ad-hoc signed but not notarized, so there's no Apple
-Developer account behind it. Installed with the script, `gh` or `curl`, it
-just runs. If you download it **with a browser**, macOS quarantines it and
+Developer account behind it. Installed with Homebrew, the script, `gh` or
+`curl`, it just runs. If you download it **with a browser**, macOS quarantines it and
 refuses to open it. Clear the flag once with
 `xattr -d com.apple.quarantine ./vaultr`.
 
