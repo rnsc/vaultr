@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +119,17 @@ func (c *Client) WithToken(token, ns string) *Client {
 	n := &Client{Addr: c.Addr, Namespace: c.Namespace, http: c.http}
 	n.SetToken(token, ns)
 	return n
+}
+
+// InNamespace returns a client for the same server and token that reads
+// secrets in namespace ns ("" = root). The token namespace carries over.
+func (c *Client) InNamespace(ns string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return &Client{
+		Addr: c.Addr, Namespace: strings.Trim(ns, "/"), token: c.token, http: c.http,
+		tokenNS: c.tokenNS, tokenNSOK: c.tokenNSOK, tokenNSBy: c.tokenNSBy,
+	}
 }
 
 // SetToken switches to a new token issued in namespace ns ("" = root), as
@@ -529,6 +541,103 @@ func (c *Client) TokenList(ctx context.Context, path string) ([]string, error) {
 	}
 	if err := json.Unmarshal(resp.Data, &d); err != nil {
 		return nil, err
+	}
+	return d.Keys, nil
+}
+
+// ErrNoNamespaces means the server has no namespaces (they need Vault
+// Enterprise or OpenBao).
+var ErrNoNamespaces = errors.New("this server has no namespaces (Vault Enterprise or OpenBao)")
+
+// maxNamespaces bounds ListNamespaces on very large servers.
+const maxNamespaces = 2000
+
+// ListNamespaces returns the namespaces the token can use, as full paths
+// ("" is the root): its own namespace and those below it that its
+// policies reach. It uses sys/internal/ui/namespaces, which any token may
+// call (like the Vault UI's namespace picker), falling back to listing
+// sys/namespaces.
+func (c *Client) ListNamespaces(ctx context.Context) ([]string, error) {
+	home, _, err := c.TokenNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	top, err := c.childNamespaces(ctx, home)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{home: true}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	// Servers answer with direct children (OpenBao) or every descendant
+	// (possibly Vault Enterprise); relative paths may be nested either way,
+	// so each new namespace is asked for its own children.
+	var visit func(parent string, children []string)
+	visit = func(parent string, children []string) {
+		for _, ch := range children {
+			full := strings.Trim(parent+"/"+strings.Trim(ch, "/"), "/")
+			mu.Lock()
+			if seen[full] || len(seen) >= maxNamespaces {
+				mu.Unlock()
+				continue
+			}
+			seen[full] = true
+			mu.Unlock()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				kids, err := c.childNamespaces(ctx, full)
+				<-sem
+				if err == nil {
+					visit(full, kids)
+				}
+			}()
+		}
+	}
+	visit(home, top)
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// childNamespaces lists the namespaces below ns, relative to it.
+func (c *Client) childNamespaces(ctx context.Context, ns string) ([]string, error) {
+	resp, err := c.doIn(ctx, ns, http.MethodGet, "sys/internal/ui/namespaces", nil, nil)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if err != nil && len(resp.Errors) == 0 {
+		return nil, nil // an empty list: 404 without an error message
+	}
+	if err != nil {
+		// No UI endpoint: list sys/namespaces (needs a policy allowing it).
+		resp, err = c.doIn(ctx, ns, http.MethodGet, "sys/namespaces", url.Values{"list": {"true"}}, nil)
+		if errors.Is(err, ErrNotFound) && len(resp.Errors) > 0 {
+			return nil, ErrNoNamespaces // "unsupported path"
+		}
+		if errors.Is(err, ErrNotFound) {
+			return nil, nil // no namespaces below ns
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	var d struct {
+		Keys []string `json:"keys"`
+	}
+	if len(resp.Data) > 0 && string(resp.Data) != "null" {
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return nil, fmt.Errorf("listing namespaces: %w", err)
+		}
 	}
 	return d.Keys, nil
 }

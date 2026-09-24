@@ -89,7 +89,8 @@ $ vaultr get secret/prod/<TAB><TAB>      ->  db/  payments/  ...
 $ vaultr get secret/prod/db/postgres p<TAB>  ->  password  port
 ```
 
-Commands, flags and `login -method` values complete too.
+Commands, flags, `login -method` values and namespace names (after `--ns`)
+complete too.
 
 - **Where candidates come from:** paths and key names come from the local
   index when it's valid, which is instant. With no index, an expired one, or
@@ -143,13 +144,14 @@ thousand secrets.
 | Search list         |                                   | Secret view     |               |
 |---------------------|-----------------------------------|-----------------|---------------|
 | type                | filter                            | `↑` `↓`         | select key    |
-| `↑` `↓` / `^n` `^p` | move                              | `r` / space     | reveal / hide |
+| `↑` `↓` / `^j` `^k` | move                              | `r` / space     | reveal / hide |
 | `enter`             | open the secret (refresh the index when nothing matches) | `enter` / `c`   | copy value    |
 | `^y`                | copy the row's value              | `y`             | copy path     |
 | `^o`                | copy the path                     | `R`             | reload        |
 | `^r`                | refresh the index                 | `esc`           | back          |
 | `^l`                | log in (again)                    | `^c`            | quit          |
 | `^e`                | edit the config file              |                 |               |
+| `^n`                | switch namespace ([more](#switching-namespaces)) |  |               |
 | `esc`               | clear the search (never quits)    |                 |               |
 | `^c`                | clear the search, or quit if it's empty |           |               |
 
@@ -291,6 +293,29 @@ wrong one, set `token_namespace` (`"/"` for root) or
 
 Each secrets namespace gets its own cache file. The TUI status line shows
 the active namespace.
+
+#### Switching namespaces
+
+- **TUI:** press `^n` to list the namespaces your token can use, type to
+  filter them, and press `enter` to switch. vaultr then loads that
+  namespace's index from the cache, or builds it. The switch lasts until
+  you quit.
+- **CLI:** `--ns NAMESPACE` (or `--namespace`) works with every command
+  except `login`, before or after the command, for that run only:
+
+  ```sh
+  vaultr --ns team-b find db       # or: vaultr find db --ns team-b
+  vaultr get --ns team-a/child secret/app/db password
+  vaultr --ns /                    # the TUI, in the root namespace
+  ```
+
+  It takes precedence over `VAULT_NAMESPACE` and the config file. Tab
+  completes namespace names after `--ns`, and paths then complete in that
+  namespace.
+
+The list holds your token's namespace and the namespaces below it that its
+policies reach. It comes from `sys/internal/ui/namespaces`, the endpoint
+behind the Vault UI's namespace picker, which any token may call.
 
 ## Cache security
 

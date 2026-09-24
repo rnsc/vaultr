@@ -33,10 +33,12 @@ type fakeBackend struct {
 	loadCache func(context.Context) ([]index.Entry, cache.Header, error)
 	login     func(context.Context, auth.Request) (string, string, error)
 	reload    func() error
+	nsList    func(context.Context) ([]string, error)
 
-	mu      sync.Mutex
-	logins  []auth.Request
-	reloads int
+	mu       sync.Mutex
+	switches []string
+	logins   []auth.Request
+	reloads  int
 }
 
 func newFakeBackend(t *testing.T) *fakeBackend {
@@ -61,6 +63,9 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		return "logged in", "", nil
 	}
 	fb.reload = func() error { return nil }
+	fb.nsList = func(context.Context) ([]string, error) {
+		return []string{"", "team-a", "team-a/child", "team-b"}, nil
+	}
 	return fb
 }
 
@@ -78,6 +83,14 @@ func (f *fakeBackend) Login(ctx context.Context, r auth.Request) (string, string
 	f.mu.Unlock()
 	return f.login(ctx, r)
 }
+func (f *fakeBackend) Namespaces(ctx context.Context) ([]string, error) { return f.nsList(ctx) }
+func (f *fakeBackend) SwitchNamespace(ns string) {
+	f.mu.Lock()
+	f.switches = append(f.switches, ns)
+	f.mu.Unlock()
+	f.client = f.client.InNamespace(ns)
+}
+
 func (f *fakeBackend) Reload() error {
 	f.mu.Lock()
 	f.reloads++

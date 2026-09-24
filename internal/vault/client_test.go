@@ -2,11 +2,13 @@ package vault
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -121,5 +123,87 @@ func TestStringify(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s: %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+// namespaceServer answers sys/internal/ui/namespaces (direct children, as
+// OpenBao does) and token lookups, from a tree of namespace -> children.
+func namespaceServer(t *testing.T, tree map[string][]string, uiEndpoint bool) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ns := r.Header.Get("X-Vault-Namespace")
+		switch {
+		case r.URL.Path == "/v1/auth/token/lookup-self":
+			_, _ = w.Write([]byte(`{"data":{"accessor":"a","ttl":3600}}`))
+		case r.URL.Path == "/v1/sys/internal/ui/namespaces" && uiEndpoint,
+			r.URL.Path == "/v1/sys/namespaces" && r.URL.Query().Get("list") == "true" && tree != nil:
+			if ns == "team-a/forbidden" {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+				return
+			}
+			if len(tree[ns]) == 0 {
+				w.WriteHeader(http.StatusNotFound) // how Vault answers an empty list
+				_, _ = w.Write([]byte(`{"errors":[]}`))
+				return
+			}
+			kids, _ := json.Marshal(tree[ns])
+			_, _ = w.Write([]byte(`{"data":{"keys":` + string(kids) + `}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":["1 error occurred:\n\t* unsupported path\n\n"]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(Config{Addr: srv.URL, Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestListNamespaces(t *testing.T) {
+	tree := map[string][]string{
+		"":                 {"team-a/", "team-b/"},
+		"team-a":           {"child/", "forbidden/"},
+		"team-a/child":     {"deeper/"},
+		"team-a/forbidden": {"hidden/"},
+	}
+	want := []string{"", "team-a", "team-a/child", "team-a/child/deeper", "team-a/forbidden", "team-b"}
+	for _, ui := range []bool{true, false} {
+		got, err := namespaceServer(t, tree, ui).ListNamespaces(context.Background())
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("ui endpoint %v: %q %v, want %q", ui, got, err, want)
+		}
+	}
+
+	// A token issued in a namespace sees it and what is below it.
+	c := namespaceServer(t, tree, true)
+	c.SetToken("t", "team-a")
+	got, err := c.ListNamespaces(context.Background())
+	if want := []string{"team-a", "team-a/child", "team-a/child/deeper", "team-a/forbidden"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("from team-a: %q %v, want %q", got, err, want)
+	}
+
+	// Servers answering with every descendant (nested relative paths).
+	flat := map[string][]string{"": {"x/", "x/y/", "x/y/z/"}}
+	got, err = namespaceServer(t, flat, true).ListNamespaces(context.Background())
+	if want := []string{"", "x", "x/y", "x/y/z"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("nested answer: %q %v, want %q", got, err, want)
+	}
+
+	// No namespaces at all (Vault community edition).
+	if _, err := namespaceServer(t, nil, false).ListNamespaces(context.Background()); !errors.Is(err, ErrNoNamespaces) {
+		t.Errorf("no namespace support: %v", err)
+	}
+}
+
+func TestInNamespace(t *testing.T) {
+	c, _ := New(Config{Addr: "http://x", Token: "t", Namespace: "a"})
+	c.SetToken("t2", "root-ish")
+	n := c.InNamespace("/b/c/")
+	ns, by, ok := n.KnownTokenNamespace()
+	if n.Namespace != "b/c" || n.Token() != "t2" || ns != "root-ish" || by != "login" || !ok || c.Namespace != "a" {
+		t.Errorf("InNamespace: %+v (%q %q %v), original %q", n, ns, by, ok, c.Namespace)
 	}
 }

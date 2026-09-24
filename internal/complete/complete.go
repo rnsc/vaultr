@@ -20,14 +20,25 @@ type Source interface {
 	Keys(ctx context.Context, path string) ([]string, bool)
 }
 
+// NamespaceSource is a Source that can also list namespaces (full paths,
+// "" for the root).
+type NamespaceSource interface {
+	Namespaces(ctx context.Context) ([]string, bool)
+}
+
 // Commands and their flags, for completing the first word and options.
 var (
 	Commands = []string{"find", "get", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
 
+	// Every command but login takes --ns/--namespace, before or after it.
 	flags = map[string][]string{
-		"find":  {"--json", "--values", "-n", "-r", "--refresh"},
-		"get":   {"--json"},
-		"login": {"-method", "-mount", "-namespace", "-username", "-role", "-callback-port", "-no-save"},
+		"":       {"-r", "--refresh", "--ns", "--namespace"}, // before any command
+		"find":   {"--json", "--values", "-n", "-r", "--refresh", "--ns", "--namespace"},
+		"get":    {"--json", "--ns", "--namespace"},
+		"index":  {"--ns", "--namespace"},
+		"status": {"--ns", "--namespace"},
+		"purge":  {"--ns", "--namespace"},
+		"login":  {"-method", "-mount", "-namespace", "-username", "-role", "-callback-port", "-no-save"},
 	}
 	subcommands = map[string][]string{
 		"config": {"show", "path", "init"},
@@ -46,7 +57,15 @@ func Candidates(ctx context.Context, sources []Source, args []string) []string {
 	}
 	cur := args[len(args)-1]
 	prev := args[:len(args)-1]
+	if len(prev) > 0 && isNamespaceFlag(prev[len(prev)-1]) {
+		// Also login's -namespace: where to log in.
+		return firstMatch(sources, func(src Source) []string { return namespaces(ctx, src, cur) })
+	}
+	prev = withoutNamespaceFlags(prev)
 	if len(prev) == 0 {
+		if strings.HasPrefix(cur, "-") {
+			return filter(flags[""], cur)
+		}
 		return filter(Commands, cur)
 	}
 	cmd := prev[0]
@@ -98,6 +117,54 @@ func firstMatch(sources []Source, f func(Source) []string) []string {
 		}
 	}
 	return nil
+}
+
+func isNamespaceFlag(w string) bool {
+	switch strings.TrimLeft(w, "-") {
+	case "ns", "namespace":
+		return strings.HasPrefix(w, "-")
+	}
+	return false
+}
+
+// withoutNamespaceFlags drops --ns NS pairs (and --ns=NS), which may come
+// before the command. login keeps its own -namespace.
+func withoutNamespaceFlags(words []string) []string {
+	if len(words) > 0 && words[0] == "login" {
+		return words
+	}
+	var out []string
+	for i := 0; i < len(words); i++ {
+		name, _, hasVal := strings.Cut(words[i], "=")
+		if isNamespaceFlag(name) {
+			if !hasVal {
+				i++
+			}
+			continue
+		}
+		out = append(out, words[i])
+	}
+	return out
+}
+
+// namespaces completes a namespace name; the root is "/".
+func namespaces(ctx context.Context, src Source, cur string) []string {
+	ns, ok := src.(NamespaceSource)
+	if !ok {
+		return nil
+	}
+	list, _ := ns.Namespaces(ctx)
+	var out []string
+	for _, n := range list {
+		if n == "" {
+			n = "/"
+		}
+		if strings.HasPrefix(n, strings.TrimPrefix(cur, "/")) {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // positional drops flags (and the values of flags that take one).

@@ -39,6 +39,10 @@ type Backend interface {
 	Login(ctx context.Context, r auth.Request) (string, string, error)
 	// Reload re-reads the config file, keeping the current token.
 	Reload() error
+	// Namespaces lists the namespaces the token can use ("" = root).
+	Namespaces(ctx context.Context) ([]string, error)
+	// SwitchNamespace makes ns the namespace for the rest of the session.
+	SwitchNamespace(ns string)
 }
 
 // Options for Run.
@@ -95,6 +99,7 @@ const (
 	modeBuilding
 	modeLogin
 	modeConfig
+	modeNamespace
 )
 
 type model struct {
@@ -118,6 +123,7 @@ type model struct {
 	detail detailState
 	login  loginState
 	cfg    configState
+	ns     nsState
 	banner string // persistent problem shown above the status line
 	// notice is a message (from a login or config save) shown together
 	// with the result of the reindex that follows it.
@@ -274,7 +280,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.flashWithNotice(text, isErr)
 	case spinner.TickMsg:
-		if m.mode != modeBuilding {
+		if m.mode != modeBuilding && (m.mode != modeNamespace || !m.ns.loading) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -319,12 +325,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.loginDone(msg)
 	case cacheMsg:
 		return m.cacheLoaded(msg)
+	case namespacesMsg:
+		return m.namespacesLoaded(msg)
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeLogin:
 			return m.updateLogin(msg)
 		case modeConfig:
 			return m.updateConfig(msg)
+		case modeNamespace:
+			return m.updateNamespace(msg)
 		case modeBuilding:
 			return m.updateBuilding(msg)
 		case modeDetail:
@@ -424,10 +434,12 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLogin("")
 	case "ctrl+e":
 		return m, m.openConfig()
-	case "up", "ctrl+p", "ctrl+k":
+	case "ctrl+n":
+		return m, m.openNamespaces()
+	case "up", "ctrl+k":
 		m.move(-1)
 		return m, nil
-	case "down", "ctrl+n", "ctrl+j":
+	case "down", "ctrl+j":
 		m.move(1)
 		return m, nil
 	case "pgup":
@@ -603,6 +615,8 @@ func (m model) View() string {
 		return m.viewLogin()
 	case modeConfig:
 		return m.viewConfig()
+	case modeNamespace:
+		return m.viewNamespace()
 	}
 	return m.viewList()
 }
@@ -656,7 +670,7 @@ func (m model) viewList() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^l login · ^e config · esc clear · ^c quit", m.width)))
+	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^n namespace · ^l login · ^e config · esc clear · ^c quit", m.width)))
 	return b.String()
 }
 

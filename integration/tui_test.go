@@ -113,6 +113,7 @@ const (
 	keyEsc   = "\x1b"
 	keyCtrlR = "\x12"
 	keyCtrlC = "\x03"
+	keyCtrlN = "\x0e"
 )
 
 func TestTUISearchRevealQuit(t *testing.T) {

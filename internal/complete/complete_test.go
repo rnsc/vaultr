@@ -36,6 +36,10 @@ func (f *fakeLive) Children(_ context.Context, dir string) ([]string, bool) {
 	return nil, false
 }
 
+func (f *fakeLive) Namespaces(context.Context) ([]string, bool) {
+	return []string{"", "team-a", "team-a/child", "team-b"}, true
+}
+
 func (f *fakeLive) Keys(_ context.Context, path string) ([]string, bool) {
 	f.calls++
 	if path == "secret/new/thing" {
@@ -65,7 +69,8 @@ func TestCommandsAndFlags(t *testing.T) {
 	eq(t, run(t, "co"), []string{"config", "completion"}, "co")
 	eq(t, run(t, "find", "--v"), []string{"--values"}, "find flags")
 	eq(t, run(t, "search", "-"), flags["find"], "alias flags")
-	eq(t, run(t, "get", "--"), []string{"--json"}, "get flags")
+	eq(t, run(t, "get", "--"), []string{"--json", "--ns", "--namespace"}, "get flags")
+	eq(t, run(t, "-"), []string{"-r", "--refresh", "--ns", "--namespace"}, "flags before a command")
 	eq(t, run(t, "login", "-method", ""), []string{"oidc", "ldap", "userpass", "token"}, "login methods")
 	eq(t, run(t, "config", ""), []string{"show", "path", "init"}, "config subcommands")
 	eq(t, run(t, "completion", "install", "z"), []string{"zsh"}, "completion install shells")
@@ -109,6 +114,20 @@ func TestFallsBackToLiveForNewSecrets(t *testing.T) {
 	if live.calls != 0 {
 		t.Errorf("live source used although the cache matched (%d calls)", live.calls)
 	}
+}
+
+func TestNamespaces(t *testing.T) {
+	all := []string{"/", "team-a", "team-a/child", "team-b"}
+	eq(t, run(t, "--ns", ""), all, "all, root as /")
+	eq(t, run(t, "get", "--namespace", "team-a"), []string{"team-a", "team-a/child"}, "prefix")
+	eq(t, run(t, "find", "-ns", "/team-b"), []string{"team-b"}, "leading slash")
+	eq(t, run(t, "login", "-namespace", "t"), all[1:], "login's -namespace")
+	// The flag and its value don't count as the command or a path.
+	eq(t, run(t, "--ns", "team-a", "ge"), []string{"get"}, "command after --ns")
+	eq(t, run(t, "--ns", "team-a", "get", "sec"), []string{"secret/"}, "path after --ns")
+	eq(t, run(t, "get", "--ns=team-a", "secret/prod/db/postgres", "p"), []string{"password", "port"}, "keys after --ns=")
+	// Without a source that knows namespaces: nothing.
+	eq(t, Candidates(context.Background(), []Source{IndexSource{Entries: entries}}, []string{"--ns", ""}), nil, "no namespace source")
 }
 
 func TestNoSources(t *testing.T) {

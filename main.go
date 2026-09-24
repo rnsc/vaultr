@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -39,7 +40,7 @@ const usage = `vaultr: search Vault KV paths and key names, fetch values on dema
 
 Usage:
   vaultr [-r] [QUERY...]         interactive search (TUI); -r refreshes the
-                                 index first
+                                 index first; ^n switches namespace
   vaultr find [flags] QUERY...   print matching path/key pairs (-r refreshes
                                  the index first)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
@@ -53,6 +54,10 @@ Usage:
   vaultr completion SHELL        print the completion script (see
                                  vaultr completion list)
   vaultr version
+
+Every command except login takes --ns NAMESPACE (or --namespace) to work
+in another namespace for this run; "/" is the root namespace. Tab
+completes namespace names.
 
 Query syntax: space separated terms, all must match (case-insensitive
 substring of the path or key name). Prefix a term with k: or p: to match
@@ -112,6 +117,18 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	var nsOverride *string
+	if cmd != "login" {
+		var err error
+		if nsOverride, args, err = namespaceFlag(args); err != nil {
+			return err
+		}
+		cmd = ""
+		if len(args) > 0 {
+			cmd = args[0]
+		}
+	}
+
 	refresh := false
 	if cmd == "-r" || cmd == "--refresh" {
 		refresh, args = true, args[1:]
@@ -121,7 +138,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	interactive := cmd == "" || !isCommand(cmd)
-	a, err := newApp(!interactive && cmd != "login")
+	a, err := newApp(!interactive && cmd != "login", nsOverride)
 	if err != nil {
 		return err
 	}
@@ -159,15 +176,20 @@ type app struct {
 	pathsOnly bool
 	mounts    []string
 	clipClear time.Duration
+	// namespace overrides the configured one (--ns, or a switch in the
+	// TUI); it survives config reloads. nsSource says which.
+	namespace *string
+	nsSource  string
 }
 
 // newApp loads settings and builds the client. Only the TUI and `login`
-// can start without a token.
-func newApp(requireToken bool) (*app, error) {
+// can start without a token. ns, when set, overrides the namespace.
+func newApp(requireToken bool, ns *string) (*app, error) {
 	s, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
+	overrideNamespace(s, ns, "flag --ns")
 	if requireToken {
 		if err := s.RequireToken(); err != nil {
 			return nil, err
@@ -177,9 +199,49 @@ func newApp(requireToken bool) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &app{}
+	a := &app{namespace: ns, nsSource: "flag --ns"}
 	a.apply(s, c)
 	return a, nil
+}
+
+func overrideNamespace(s *config.Settings, ns *string, source string) {
+	if ns != nil {
+		s.Vault.Namespace = *ns
+		s.Source["namespace"] = source
+	}
+}
+
+// nsFlags are the spellings of the global namespace flag.
+var nsFlags = []string{"--ns", "-ns", "--namespace", "-namespace"}
+
+// namespaceFlag removes --ns NS (or --ns=NS, --namespace, single dash)
+// from args, wherever it appears, and returns its value: "/" or "" is the
+// root namespace.
+func namespaceFlag(args []string) (*string, []string, error) {
+	var ns *string
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		name, val, hasVal := strings.Cut(a, "=")
+		if !slices.Contains(nsFlags, name) {
+			out = append(out, a)
+			continue
+		}
+		if !hasVal {
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf(`%s needs a namespace ("/" for the root)`, name)
+			}
+			i++
+			val = args[i]
+		}
+		v := strings.Trim(val, "/")
+		ns = &v
+	}
+	return ns, out, nil
 }
 
 func (a *app) apply(s *config.Settings, c *vault.Client) {
@@ -246,6 +308,7 @@ func (a *app) Reload() error {
 	if tok != "" {
 		s.Vault.Token = tok
 	}
+	overrideNamespace(s, a.namespace, a.nsSource)
 	c, err := vault.New(s.Vault)
 	if err != nil {
 		return err
@@ -255,6 +318,19 @@ func (a *app) Reload() error {
 	}
 	a.apply(s, c)
 	return nil
+}
+
+// Namespaces lists the namespaces the token can use.
+func (a *app) Namespaces(ctx context.Context) ([]string, error) {
+	return a.client.ListNamespaces(ctx)
+}
+
+// SwitchNamespace makes ns the namespace for the rest of the session. The
+// index is per namespace, so the caller loads or builds it next.
+func (a *app) SwitchNamespace(ns string) {
+	a.namespace, a.nsSource = &ns, "switched in the TUI"
+	overrideNamespace(a.settings, &ns, a.nsSource)
+	a.apply(a.settings, a.client.InNamespace(ns))
 }
 
 // LoginRequest fills a login request from the configured defaults.
@@ -783,8 +859,13 @@ func completeCmd(ctx context.Context, words []string) {
 	for i := range words {
 		words[i] = complete.Unescape(words[i])
 	}
+	// A --ns already typed applies to the paths being completed.
+	var ns *string
+	if len(words) > 0 {
+		ns, _, _ = namespaceFlag(words[:len(words)-1]) // error: its value is being completed
+	}
 	var sources []complete.Source
-	if a, err := newApp(false); err == nil && a.client.Token() != "" {
+	if a, err := newApp(false, ns); err == nil && a.client.Token() != "" {
 		// The cache first (instant, and has key names); then Vault itself
 		// for secrets added since, or when there is no valid cache.
 		if entries, _, err := a.store.Load(ctx); err == nil {
