@@ -170,9 +170,13 @@ jobs:
         run: |
           cask=dist/homebrew/Casks/vaultr.rb
           ruby -c "$cask"
-          for want in 'binary "vaultr"' bash_completion zsh_completion fish_completion 'com.apple.quarantine'; do
+          for want in 'binary "vaultr"' bash_completion zsh_completion fish_completion postflight_steps 'com.apple.quarantine'; do
             grep -q "$want" "$cask" || { echo "::error::$cask lacks $want"; cat "$cask"; exit 1; }
           done
+          # Deprecated in Homebrew: warns on every `brew update`.
+          if grep -qE '^ *(pre|post)flight do' "$cask"; then
+            echo "::error::$cask uses a deprecated preflight/postflight block"; cat "$cask"; exit 1
+          fi
       - name: Install script (checksum + install from the built archives)
         run: |
           scripts/install.sh --from dist --dir "$RUNNER_TEMP/bin"
@@ -184,12 +188,58 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS
+            dist/homebrew/Casks/vaultr.rb
           retention-days: 7
+
+  # Installs the generated cask with the runner's real (updated) Homebrew,
+  # from the snapshot archive, the way `brew install rnsc/tap/vaultr` does.
+  cask:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: vaultr-snapshot
+          path: dist
+      - name: Install the cask from a local tap
+        run: |
+          brew update --quiet
+          brew --version
+          brew tap-new --no-git vaultr-ci/local
+          tap="$(brew --repository vaultr-ci/local)"
+          mkdir -p "$tap/Casks" # tap-new only creates Formula/
+          # Point the download at the snapshot archive (same checksum).
+          sed -E "s|https://github.com/rnsc/vaultr/releases/download/[^/]+/|file://$PWD/dist/|" \
+            dist/homebrew/Casks/vaultr.rb > "$tap/Casks/vaultr.rb"
+          cat "$tap/Casks/vaultr.rb"
+          brew install --cask vaultr-ci/local/vaultr 2>&1 | tee install.log
+          if grep -qiE 'deprecat|^Warning' install.log; then
+            echo "::error::Homebrew warned about the cask (see the log above)"
+            exit 1
+          fi
+      - name: Check the installed cask
+        run: |
+          vaultr version
+          prefix="$(brew --prefix)"
+          test -e "$prefix/etc/bash_completion.d/vaultr"
+          test -e "$prefix/share/zsh/site-functions/_vaultr"
+          test -e "$prefix/share/fish/vendor_completions.d/vaultr.fish"
+          bin="$(ls "$(brew --caskroom)"/vaultr/*/vaultr)"
+          if xattr -p com.apple.quarantine "$bin" 2>/dev/null; then
+            echo "::error::$bin is still quarantined"
+            exit 1
+          fi
+          brew uninstall --cask vaultr-ci/local/vaultr
 
   # Single required check for branch protection.
   ci-ok:
     if: always()
-    needs: [lint, unit, integration, build]
+    needs: [lint, unit, integration, build, cask]
     runs-on: ubuntu-24.04
     steps:
       - name: All jobs passed

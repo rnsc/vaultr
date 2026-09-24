@@ -60,13 +60,18 @@ homebrew_casks:
       zsh: completions/vaultr.zsh
       fish: completions/vaultr.fish
     # Homebrew quarantines cask downloads, and Gatekeeper refuses a
-    # quarantined binary that isn't notarized (see above).
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/vaultr"]
-          end
+    # quarantined binary that isn't notarized (see above). GoReleaser can
+    # only generate the deprecated `postflight do` hook (Homebrew warns on
+    # every `brew update`), so the `postflight_steps` stanza is written by
+    # hand. -r and must_succeed: false: nothing to remove is fine.
+    # GoReleaser 2.19 generates it (goreleaser/goreleaser#6870): then move
+    # this back to `hooks`; CI's cask job checks the result either way.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{" }}staged_path{{ "}}" }}/vaultr"], must_succeed: false
+        end
+      end
     commit_author:
       name: github-actions[bot]
       email: 41898282+github-actions[bot]@users.noreply.github.com
