@@ -212,6 +212,7 @@ jobs:
           brew --version
           brew tap-new --no-git vaultr-ci/local
           tap="$(brew --repository vaultr-ci/local)"
+          mkdir -p "$tap/Casks" # tap-new only creates Formula/
           # Point the download at the snapshot archive (same checksum).
           sed -E "s|https://github.com/rnsc/vaultr/releases/download/[^/]+/|file://$PWD/dist/|" \
             dist/homebrew/Casks/vaultr.rb > "$tap/Casks/vaultr.rb"
