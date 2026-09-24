@@ -3,7 +3,7 @@
 #
 #   scripts/install.sh [--version vX.Y.Z] [--dir ~/.local/bin] [--from DIR]
 #
-# Uses the GitHub CLI when available (works for private repositories),
+# Uses the GitHub CLI when available (authenticated, so no API rate limit),
 # otherwise curl. The archive is checked against SHA256SUMS. Files fetched
 # this way carry no macOS quarantine flag, so the (ad-hoc signed) binary
 # runs without Gatekeeper prompts. --from installs from a local dist/
