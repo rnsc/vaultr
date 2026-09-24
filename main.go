@@ -9,14 +9,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-isatty"
 
 	"github.com/rnsc/vaultr/internal/cache"
+	"github.com/rnsc/vaultr/internal/config"
 	"github.com/rnsc/vaultr/internal/index"
 	"github.com/rnsc/vaultr/internal/search"
 	"github.com/rnsc/vaultr/internal/tui"
@@ -37,17 +38,22 @@ Usage:
   vaultr index                   rebuild the local index now
   vaultr status                  show cache state
   vaultr purge                   delete the local index and its key
+  vaultr config [show|path|init] show settings, or write a config template
   vaultr version
 
 Query syntax: space separated terms, all must match (case-insensitive
 substring of the path or key name). Prefix a term with k: or p: to match
 only key names or only paths, e.g. "prod k:password".
 
-Connection uses the standard VAULT_ADDR, VAULT_TOKEN (or ~/.vault-token),
-VAULT_NAMESPACE, VAULT_CACERT, VAULT_CLIENT_CERT, VAULT_CLIENT_KEY and
-VAULT_SKIP_VERIFY variables.
+Connection uses the standard VAULT_ADDR (or VAULT_URL), VAULT_TOKEN (or
+~/.vault-token), VAULT_NAMESPACE, VAULT_CACERT, VAULT_CLIENT_CERT,
+VAULT_CLIENT_KEY and VAULT_SKIP_VERIFY variables.
+
+Settings can also live in ~/.config/vaultr/config.toml (see "vaultr config
+init"); environment variables take precedence over the file.
 
 Settings:
+  VAULTR_CONFIG      config file path
   VAULTR_MOUNTS      comma separated KV mounts to index (default: discover)
   VAULTR_WORKERS     concurrent requests while indexing (default 32)
   VAULTR_MAX_AGE     cache lifetime, capped at 2h (default 2h)
@@ -83,6 +89,8 @@ func run(ctx context.Context, args []string) error {
 	case "version", "--version":
 		fmt.Println(version)
 		return nil
+	case "config":
+		return configCmd(args[1:])
 	}
 
 	a, err := newApp()
@@ -123,53 +131,59 @@ type app struct {
 }
 
 func newApp() (*app, error) {
-	cfg, err := vault.ConfigFromEnv()
+	s, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	c, err := vault.New(cfg)
+	if err := s.RequireToken(); err != nil {
+		return nil, err
+	}
+	c, err := vault.New(s.Vault)
 	if err != nil {
 		return nil, err
 	}
-	dir, err := cache.DefaultDir()
-	if err != nil {
-		return nil, err
-	}
-	a := &app{
+	return &app{
 		client:    c,
-		store:     &cache.Store{Dir: dir, Client: c},
-		maxAge:    cache.MaxAge,
-		workers:   32,
-		clipClear: 45 * time.Second,
+		store:     &cache.Store{Dir: s.CacheDir, Client: c},
+		maxAge:    s.MaxAge,
+		workers:   s.Workers,
+		pathsOnly: s.PathsOnly,
+		mounts:    s.Mounts,
+		clipClear: s.ClipClear,
+	}, nil
+}
+
+func configCmd(args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
 	}
-	if v := os.Getenv("VAULTR_MAX_AGE"); v != "" {
-		d, err := time.ParseDuration(v)
+	switch sub {
+	case "", "show":
+		s, err := config.Load()
 		if err != nil {
-			return nil, fmt.Errorf("VAULTR_MAX_AGE: %w", err)
+			return err
 		}
-		a.maxAge = min(d, cache.MaxAge)
-	}
-	if v := os.Getenv("VAULTR_WORKERS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return nil, fmt.Errorf("VAULTR_WORKERS: invalid value %q", v)
+		fmt.Print(s.Describe())
+		return nil
+	case "path":
+		fmt.Println(config.DefaultPath())
+		return nil
+	case "init":
+		p := config.DefaultPath()
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("%s already exists", p)
 		}
-		a.workers = n
-	}
-	if v := os.Getenv("VAULTR_CLIP_CLEAR"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("VAULTR_CLIP_CLEAR: %w", err)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			return err
 		}
-		a.clipClear = d
-	}
-	a.pathsOnly, _ = strconv.ParseBool(os.Getenv("VAULTR_PATHS_ONLY"))
-	for _, m := range strings.Split(os.Getenv("VAULTR_MOUNTS"), ",") {
-		if m = strings.Trim(strings.TrimSpace(m), "/"); m != "" {
-			a.mounts = append(a.mounts, m+"/")
+		if err := os.WriteFile(p, []byte(config.Template), 0o600); err != nil {
+			return err
 		}
+		fmt.Fprintln(os.Stderr, "wrote", p)
+		return nil
 	}
-	return a, nil
+	return fmt.Errorf("unknown config command %q (show, path, init)", sub)
 }
 
 func (a *app) kvMounts(ctx context.Context) ([]vault.Mount, error) {

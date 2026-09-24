@@ -70,18 +70,6 @@ type Store struct {
 	Client *vault.Client
 }
 
-// DefaultDir returns the per-user cache directory.
-func DefaultDir() (string, error) {
-	if d := os.Getenv("VAULTR_CACHE_DIR"); d != "" {
-		return d, nil
-	}
-	d, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(d, "vaultr"), nil
-}
-
 // File is the cache file path, one per Vault address and namespace.
 func (s *Store) File() string {
 	h := sha256.Sum256([]byte(s.Client.Addr + "\x00" + s.Client.Namespace))

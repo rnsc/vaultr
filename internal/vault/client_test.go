@@ -11,41 +11,6 @@ import (
 	"time"
 )
 
-func TestConfigFromEnv(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("VAULT_ADDR", "")
-	t.Setenv("VAULT_TOKEN", "")
-	t.Setenv("VAULT_SKIP_VERIFY", "")
-	t.Setenv("VAULT_NAMESPACE", "")
-
-	if _, err := ConfigFromEnv(); err == nil {
-		t.Error("no token: want error")
-	}
-
-	_ = os.WriteFile(filepath.Join(home, ".vault-token"), []byte("  hvs.file\n"), 0o600)
-	c, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Token != "hvs.file" || c.Addr != "https://127.0.0.1:8200" {
-		t.Errorf("got %+v", c)
-	}
-
-	t.Setenv("VAULT_TOKEN", "hvs.env")
-	t.Setenv("VAULT_SKIP_VERIFY", "true")
-	t.Setenv("VAULT_NAMESPACE", "team/")
-	c, _ = ConfigFromEnv()
-	if c.Token != "hvs.env" || !c.SkipVerify || c.Namespace != "team/" {
-		t.Errorf("env precedence: %+v", c)
-	}
-
-	t.Setenv("VAULT_SKIP_VERIFY", "perhaps")
-	if _, err := ConfigFromEnv(); err == nil {
-		t.Error("invalid VAULT_SKIP_VERIFY accepted")
-	}
-}
-
 func TestNewBadTLSFiles(t *testing.T) {
 	if _, err := New(Config{Addr: "https://x", Token: "t", CACert: "/does/not/exist"}); err == nil {
 		t.Error("missing CA file accepted")

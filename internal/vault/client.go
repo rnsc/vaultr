@@ -15,8 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -44,40 +42,6 @@ type Config struct {
 	ClientCert string
 	ClientKey  string
 	SkipVerify bool
-}
-
-// ConfigFromEnv reads the standard VAULT_* environment variables, falling
-// back to ~/.vault-token for the token.
-func ConfigFromEnv() (Config, error) {
-	c := Config{
-		Addr:       os.Getenv("VAULT_ADDR"),
-		Token:      os.Getenv("VAULT_TOKEN"),
-		Namespace:  os.Getenv("VAULT_NAMESPACE"),
-		CACert:     os.Getenv("VAULT_CACERT"),
-		ClientCert: os.Getenv("VAULT_CLIENT_CERT"),
-		ClientKey:  os.Getenv("VAULT_CLIENT_KEY"),
-	}
-	if c.Addr == "" {
-		c.Addr = "https://127.0.0.1:8200"
-	}
-	if v := os.Getenv("VAULT_SKIP_VERIFY"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return c, fmt.Errorf("invalid VAULT_SKIP_VERIFY: %w", err)
-		}
-		c.SkipVerify = b
-	}
-	if c.Token == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			if b, err := os.ReadFile(filepath.Join(home, ".vault-token")); err == nil {
-				c.Token = strings.TrimSpace(string(b))
-			}
-		}
-	}
-	if c.Token == "" {
-		return c, errors.New("no Vault token: set VAULT_TOKEN or run `vault login`")
-	}
-	return c, nil
 }
 
 // New builds a client from a config.

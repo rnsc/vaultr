@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"flag"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -50,6 +52,8 @@ func setEnv(t *testing.T, kv map[string]string) {
 		"VAULT_ADDR": "http://127.0.0.1:1", "VAULT_TOKEN": "t", "HOME": t.TempDir(),
 		"VAULTR_CACHE_DIR": t.TempDir(), "VAULTR_MAX_AGE": "", "VAULTR_WORKERS": "",
 		"VAULTR_CLIP_CLEAR": "", "VAULTR_PATHS_ONLY": "", "VAULTR_MOUNTS": "", "VAULT_SKIP_VERIFY": "",
+		"VAULT_URL": "", "VAULT_NAMESPACE": "", "XDG_CONFIG_HOME": "",
+		"VAULTR_CONFIG": filepath.Join(t.TempDir(), "config.toml"),
 	}
 	for k, v := range kv {
 		base[k] = v
@@ -123,5 +127,37 @@ func TestRunWithoutVault(t *testing.T) {
 	}
 	if err := run(context.Background(), []string{"get"}); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Errorf("get without args: %v", err)
+	}
+}
+
+func TestConfigCommand(t *testing.T) {
+	setEnv(t, map[string]string{"VAULT_TOKEN": ""})
+	p := os.Getenv("VAULTR_CONFIG")
+	if err := run(context.Background(), []string{"config", "init"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(p); err != nil || !strings.Contains(string(b), "namespace") {
+		t.Fatalf("template not written: %v", err)
+	}
+	if err := run(context.Background(), []string{"config", "init"}); err == nil {
+		t.Error("init overwrote an existing file")
+	}
+	// Works without a token.
+	for _, sub := range [][]string{{"config"}, {"config", "show"}, {"config", "path"}} {
+		if err := run(context.Background(), sub); err != nil {
+			t.Errorf("%v: %v", sub, err)
+		}
+	}
+	if err := run(context.Background(), []string{"config", "bogus"}); err == nil {
+		t.Error("unknown subcommand accepted")
+	}
+	_ = os.WriteFile(p, []byte("namespace = \"team-a\"\n"), 0o600)
+	setEnv(t, map[string]string{"VAULTR_CONFIG": p})
+	a, err := newApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.client.Namespace != "team-a" {
+		t.Errorf("namespace from config not applied: %q", a.client.Namespace)
 	}
 }
