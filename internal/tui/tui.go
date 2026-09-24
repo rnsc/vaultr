@@ -382,6 +382,14 @@ func (m model) cacheLoaded(msg cacheMsg) (tea.Model, tea.Cmd) {
 	return m, m.flashWithNotice("", false)
 }
 
+// indexAge describes when the index was built, e.g. " (built 12m ago)".
+func (m model) indexAge() string {
+	if m.header.Created.IsZero() {
+		return ""
+	}
+	return " (built " + time.Since(m.header.Created).Round(time.Minute).String() + " ago)"
+}
+
 // flashWithNotice shows text preceded by any pending notice.
 func (m *model) flashWithNotice(text string, isErr bool) tea.Cmd {
 	if m.notice != "" {
@@ -433,6 +441,10 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeDetail
 			m.detail = detailState{row: row, loading: true}
 			return m, m.fetch(row.Entry)
+		}
+		if m.ix != nil && m.input.Value() != "" {
+			// Nothing matches: maybe it was added after the index was built.
+			return m, m.startBuild()
 		}
 		return m, nil
 	case "ctrl+y":
@@ -631,11 +643,20 @@ func (m model) viewList() string {
 		b.WriteString(line + "\n")
 		lines++
 	}
+	if lines == 0 && m.ix != nil && m.input.Value() != "" && h > 1 {
+		hint := wordWrap("No match. Added it recently? Press enter or ^r to refresh the index"+m.indexAge()+".", m.width-2)
+		for _, l := range append([]string{""}, strings.Split(hint, "\n")...) {
+			if lines < h {
+				b.WriteString(" " + sSubtle.Render(l) + "\n")
+				lines++
+			}
+		}
+	}
 	for ; lines < h; lines++ {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r reindex · ^l login · ^e config · esc clear · ^c quit", m.width)))
+	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^l login · ^e config · esc clear · ^c quit", m.width)))
 	return b.String()
 }
 

@@ -1,0 +1,114 @@
+name: demo
+
+# Re-records the README GIFs (demo/*.gif) when a pull request changes what
+# they show (Go code, the tapes, the demo scripts), and commits them to the
+# PR branch, so they land on main with the merge. A hash of those inputs
+# (demo/inputs.sha256) is committed with the GIFs, so unchanged PRs skip
+# the recording and the bot commit does not trigger another round.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: demo-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the GIFs to the PR branch
+  actions: write # re-run CI on the new commit
+
+jobs:
+  gifs:
+    # Only for branches of this repository (a fork's token cannot push).
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRANCH: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+
+      - name: Check whether the GIFs are up to date
+        id: check
+        run: |
+          want="$(scripts/demo.sh hash)"
+          have="$(cat demo/inputs.sha256 2>/dev/null || true)"
+          if [ "$want" = "$have" ] && [ -f demo/tui.gif ] && [ -f demo/cli.gif ]; then
+            echo "GIFs are up to date." >> "$GITHUB_STEP_SUMMARY"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.stale == 'true'
+        with:
+          go-version: stable
+
+      - name: Install VHS, ttyd, ffmpeg and fonts
+        if: steps.check.outputs.stale == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg ttyd fonts-jetbrains-mono
+          go install github.com/charmbracelet/vhs@v0.12.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Record
+        if: steps.check.outputs.stale == 'true'
+        run: scripts/demo.sh
+
+      - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.stale == 'true'
+        with:
+          name: demo-gifs
+          path: demo/*.gif
+          retention-days: 7
+
+      # Commit through the GraphQL API rather than git push: GitHub signs
+      # commits it creates for the workflow token, so they show as Verified.
+      - name: Commit to the PR branch (signed by GitHub)
+        id: push
+        if: steps.check.outputs.stale == 'true' && env.BRANCH != github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          changed=()
+          for f in demo/tui.gif demo/cli.gif demo/inputs.sha256; do
+            if ! git diff --quiet -- "$f" 2>/dev/null || [ -z "$(git ls-files -- "$f")" ]; then
+              changed+=("$f")
+            fi
+          done
+          if [ ${#changed[@]} -eq 0 ]; then
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          additions='[]'
+          for f in "${changed[@]}"; do
+            base64 -w0 "$f" > "$RUNNER_TEMP/b64"
+            additions="$(jq --arg path "$f" --rawfile contents "$RUNNER_TEMP/b64" \
+              '. + [{path: $path, contents: $contents}]' <<<"$additions")"
+          done
+          jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH" \
+            --arg head "$(git rev-parse HEAD)" --argjson additions "$additions" '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: { input: {
+                branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                expectedHeadOid: $head,
+                message: { headline: "Update demo GIFs" },
+                fileChanges: { additions: $additions }
+              } }
+            }' > "$RUNNER_TEMP/commit.json"
+          url="$(gh api graphql --input "$RUNNER_TEMP/commit.json" --jq '.data.createCommitOnBranch.commit.url')"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          echo "Updated the demo GIFs: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # Pushes made with the workflow token don't start workflows, so the
+      # new head commit would have no CI (and no ci-ok for branch
+      # protection). workflow_dispatch is the exception: start CI on it.
+      - name: Run CI on the new commit
+        if: steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref "$BRANCH"

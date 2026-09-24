@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"sort"
@@ -335,5 +336,52 @@ func TestCLIBadSettings(t *testing.T) {
 		} else {
 			delete(c.env, k)
 		}
+	}
+}
+
+// freshMount creates a KV v2 mount for one test, so adding secrets to it
+// does not disturb the shared fixture. It returns the mount ("x/").
+func freshMount(t *testing.T) string {
+	t.Helper()
+	m := fx.Prefix + "-fresh-" + itoa(freePort(t))
+	if _, err := root.Write(ctx(t), "sys/mounts/"+m, map[string]any{"type": "kv", "options": map[string]string{"version": "2"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Delete(context.Background(), "sys/mounts/"+m) })
+	putSecret(t, m+"/", "seed", "seed_key")
+	return m + "/"
+}
+
+// putSecret writes a secret, retrying while a new KV v2 mount upgrades.
+func putSecret(t *testing.T, mount, path, key string) {
+	t.Helper()
+	var err error
+	for i := 0; i < 50; i++ {
+		if _, err = root.Write(ctx(t), mount+"data/"+path, map[string]any{"data": map[string]any{key: "v"}}); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal(err)
+}
+
+func TestCLIFindRefresh(t *testing.T) {
+	t.Parallel()
+	mount := freshMount(t)
+	c := newCLI(t, rootChild(t, time.Hour))
+	c.env["VAULTR_MOUNTS"] = mount
+	c.ok("index")
+	putSecret(t, mount, "fresh/added", "fresh_key") // after the index was built
+	if r := c.run("find", "fresh_key"); r.code != 1 {
+		t.Fatalf("new secret found without a refresh? %+v", r)
+	}
+	for _, flag := range []string{"-r", "--refresh"} {
+		if r := c.ok("find", flag, "fresh_key"); r.stdout != mount+"fresh/added\tfresh_key\n" {
+			t.Errorf("find %s: %q", flag, r.stdout)
+		}
+	}
+	// The refreshed index is kept for later searches.
+	if r := c.ok("find", "fresh_key"); !strings.Contains(r.stdout, "fresh_key") {
+		t.Errorf("refresh not saved: %q", r.stdout)
 	}
 }

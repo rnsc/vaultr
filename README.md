@@ -4,6 +4,10 @@ Fast keyword search over HashiCorp Vault KV secrets. It searches every
 path and every key name across all KV mounts. Values are fetched live, only
 when you ask for them.
 
+![vaultr TUI: search, reveal a value, refresh the index](demo/tui.gif)
+
+![vaultr CLI: find, get, and refresh](demo/cli.gif)
+
 - **Recursive index** of every KV v1/v2 mount the token can see (concurrent crawl).
 - **Instant search**: all terms must match a path or a key name. `k:` / `p:` limit a term to keys or paths.
 - **TUI** for browsing and copying. The **CLI** (`find`, `get`) works for scripts and pipes.
@@ -50,6 +54,8 @@ vaultr prod db                  # interactive, pre-filled query
 vaultr find stripe k:key        # print "path<TAB>key" lines (exit 1 if none)
 vaultr find --values ldap       # also fetch the matching values
 vaultr find --json -n 20 redis  # JSON lines
+vaultr find -r paypal           # refresh the index first (secret added since)
+vaultr -r                       # TUI, refreshing the index at startup
 vaultr get secret/prod/db password
 vaultr login                    # log in with the [auth] defaults from the config
 vaultr login -method ldap -username jdoe
@@ -70,16 +76,32 @@ vaultr purge                    # delete cache and its key
 Matching is case-insensitive. Exact key names rank first, then key prefixes,
 then the last path segment.
 
+### Finding secrets added recently
+
+The index is a snapshot, rebuilt at most every 2 hours. If a secret was
+added since, refresh it:
+
+- **TUI:** when nothing matches, the list says so and shows how old the
+  index is. Press `enter` (or `^r` at any time) to refresh it; your search
+  stays in place. `vaultr -r` refreshes at startup.
+- **CLI:** `vaultr find -r QUERY` refreshes before searching. Without
+  `-r`, a search with no results says how old the index is and suggests
+  the `-r` retry. `vaultr refresh` (or `vaultr index`) refreshes without
+  searching.
+
+A refresh re-crawls every mount, which takes about a second for a few
+thousand secrets.
+
 ### TUI keys
 
 | Search list         |                                   | Secret view     |               |
 |---------------------|-----------------------------------|-----------------|---------------|
 | type                | filter                            | `↑` `↓`         | select key    |
 | `↑` `↓` / `^n` `^p` | move                              | `r` / space     | reveal / hide |
-| `enter`             | open the secret                   | `enter` / `c`   | copy value    |
+| `enter`             | open the secret (refresh the index when nothing matches) | `enter` / `c`   | copy value    |
 | `^y`                | copy the row's value              | `y`             | copy path     |
 | `^o`                | copy the path                     | `R`             | reload        |
-| `^r`                | rebuild the index                 | `esc`           | back          |
+| `^r`                | refresh the index                 | `esc`           | back          |
 | `^l`                | log in (again)                    | `^c`            | quit          |
 | `^e`                | edit the config file              |                 |               |
 | `esc`               | clear the search (never quits)    |                 |               |
@@ -325,6 +347,24 @@ to `main`:
 
 `ci-ok` is a single job that sums up the others, to use as the required
 check for branch protection.
+
+## Demo GIFs
+
+The GIFs above are recorded with [VHS](https://github.com/charmbracelet/vhs)
+from `demo/tui.tape` and `demo/cli.tape`, against a throwaway dev server
+loaded with fake demo secrets (`go run ./tools/seed -demo`).
+
+`.github/workflows/demo.yml` keeps them current. On a pull request that
+changes something they show (Go code, the tapes, the demo scripts), it
+re-records them on the runner and commits them to the PR branch. GitHub
+creates that commit through its API and signs it, so it shows as
+**Verified**. Then it starts CI on the new commit. When the PR merges,
+`main` and the release it triggers already have the updated GIFs. A hash
+of the inputs (`demo/inputs.sha256`) is stored with them, so PRs that
+don't touch those inputs skip the recording.
+
+To record them locally, install `vhs`, `ttyd` and `ffmpeg` and run
+`make demo`.
 
 ## Releases
 

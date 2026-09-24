@@ -269,3 +269,27 @@ func TestReindexAfterSaveUsesCache(t *testing.T) {
 		t.Errorf("after save: mode %v rows %d", m.mode, len(m.results))
 	}
 }
+
+func TestNoMatchOffersRefresh(t *testing.T) {
+	fb := newFakeBackend(t)
+	fresh := append([]index.Entry{{Path: "secret/just/added", Mount: "secret/", KV: 2, Keys: []string{"new_key"}}}, testEntries...)
+	builds := 0
+	fb.build = func(context.Context, func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+		builds++
+		return fresh, cache.Header{}, "", nil
+	}
+	m := newTest(t, Options{Backend: fb, Entries: testEntries})
+	m = typeText(t, m, "new_key")
+	if len(m.results) != 0 || !strings.Contains(plain(m.View()), "Press enter or ^r to refresh") {
+		t.Fatalf("no-match hint missing:\n%s", plain(m.View()))
+	}
+	m = press(t, m, "enter")
+	if builds != 1 || len(m.results) != 1 || m.results[0].Key != "new_key" || m.input.Value() != "new_key" {
+		t.Errorf("refresh on enter: builds %d rows %d query %q", builds, len(m.results), m.input.Value())
+	}
+	// With matches, enter opens the secret instead of refreshing.
+	m = press(t, m, "enter")
+	if builds != 1 || m.mode != modeDetail {
+		t.Errorf("enter with a match: builds %d mode %v", builds, m.mode)
+	}
+}

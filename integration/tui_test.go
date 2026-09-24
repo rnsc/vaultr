@@ -189,3 +189,32 @@ func TestTUIInvalidTokenOpensLogin(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+func TestTUIRefreshFlagAndNoMatch(t *testing.T) {
+	t.Parallel()
+	mount := freshMount(t)
+	c := newCLI(t, rootChild(t, time.Hour))
+	c.env["VAULTR_MOUNTS"] = mount
+	c.ok("index")
+	putSecret(t, mount, "fresh/one", "first_new_key")
+
+	// Cached index: no match, the hint offers a refresh, enter does it.
+	tm := startTUI(t, c, "first_new_key")
+	tm.waitFor(0, "Press enter or ^r to refresh")
+	m := tm.mark()
+	tm.send(keyEnter)
+	tm.waitFor(m, "indexed ")
+	tm.waitFor(m, "fresh/one")
+	tm.send(keyCtrlC)
+	tm.send(keyCtrlC)
+	tm.waitExit()
+
+	// vaultr -r rebuilds at startup even with a valid cache.
+	putSecret(t, mount, "fresh/two", "second_new_key")
+	tm = startTUI(t, c, "-r", "second_new_key")
+	tm.waitFor(0, "indexed ")
+	tm.waitFor(0, "fresh/two")
+	tm.send(keyCtrlC)
+	tm.send(keyCtrlC)
+	tm.waitExit()
+}

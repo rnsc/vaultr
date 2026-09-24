@@ -8,11 +8,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -35,10 +37,12 @@ var errNoMatch = errors.New("no match")
 const usage = `vaultr: search Vault KV paths and key names, fetch values on demand.
 
 Usage:
-  vaultr [QUERY...]              interactive search (TUI)
-  vaultr find [flags] QUERY...   print matching path/key pairs
+  vaultr [-r] [QUERY...]         interactive search (TUI); -r refreshes the
+                                 index first
+  vaultr find [flags] QUERY...   print matching path/key pairs (-r refreshes
+                                 the index first)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
-  vaultr index                   rebuild the local index now
+  vaultr index                   refresh the local index now (also: refresh)
   vaultr status                  show cache state
   vaultr purge                   delete the local index and its key
   vaultr login [flags]           log in (oidc, ldap, userpass, token) and
@@ -99,6 +103,14 @@ func run(ctx context.Context, args []string) error {
 		return configCmd(args[1:])
 	}
 
+	refresh := false
+	if cmd == "-r" || cmd == "--refresh" {
+		refresh, args = true, args[1:]
+		cmd = ""
+		if len(args) > 0 {
+			cmd = args[0]
+		}
+	}
 	interactive := cmd == "" || !isCommand(cmd)
 	a, err := newApp(!interactive && cmd != "login")
 	if err != nil {
@@ -126,7 +138,7 @@ func run(ctx context.Context, args []string) error {
 	if strings.HasPrefix(cmd, "-") {
 		return fmt.Errorf("unknown flag %s (see vaultr help)", cmd)
 	}
-	return a.interactive(ctx, strings.Join(args, " "))
+	return a.interactive(ctx, strings.Join(args, " "), refresh)
 }
 
 type app struct {
@@ -487,7 +499,7 @@ func (a *app) load(ctx context.Context) ([]index.Entry, cache.Header, error) {
 	return a.build(ctx, false)
 }
 
-func (a *app) interactive(ctx context.Context, query string) error {
+func (a *app) interactive(ctx context.Context, query string, refresh bool) error {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		if err := a.settings.RequireToken(); err != nil {
 			return err
@@ -498,6 +510,9 @@ func (a *app) interactive(ctx context.Context, query string) error {
 	if a.client.Token() == "" {
 		opt.Login = "No Vault token found."
 		return tui.Run(opt)
+	}
+	if refresh {
+		return tui.Run(opt) // no entries: the TUI rebuilds first
 	}
 	entries, h, err := a.store.Load(ctx)
 	switch {
@@ -517,6 +532,9 @@ func (a *app) find(ctx context.Context, args []string) error {
 	asJSON := fs.Bool("json", false, "output JSON lines")
 	limit := fs.Int("n", 0, "maximum results (0 = all)")
 	withValues := fs.Bool("values", false, "also fetch and print matching values (live from Vault)")
+	var refresh bool
+	fs.BoolVar(&refresh, "r", false, "refresh the index before searching (finds secrets added since)")
+	fs.BoolVar(&refresh, "refresh", false, "same as -r")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
@@ -525,12 +543,20 @@ func (a *app) find(ctx context.Context, args []string) error {
 	if strings.TrimSpace(q) == "" {
 		return errors.New("find: missing query")
 	}
-	entries, _, err := a.load(ctx)
+	var entries []index.Entry
+	var h cache.Header
+	if refresh {
+		entries, h, err = a.build(ctx, false)
+	} else {
+		entries, h, err = a.load(ctx)
+	}
 	if err != nil {
 		return err
 	}
 	rows := search.New(entries).Search(q, *limit)
 	enc := json.NewEncoder(os.Stdout)
+	out := tableWriter()
+	defer out.Flush()
 	secrets := map[string]map[string]string{}
 	for _, r := range rows {
 		var val *string
@@ -563,9 +589,13 @@ func (a *app) find(ctx context.Context, args []string) error {
 		if val != nil {
 			line += "\t" + *val
 		}
-		fmt.Println(line)
+		fmt.Fprintln(out, line)
 	}
 	if len(rows) == 0 {
+		if !refresh && isatty.IsTerminal(os.Stderr.Fd()) {
+			fmt.Fprintf(os.Stderr, "no match in the index built %s ago; added it recently? retry with: vaultr find -r %s\n",
+				time.Since(h.Created).Round(time.Second), q)
+		}
 		return errNoMatch
 	}
 	return nil
@@ -615,8 +645,10 @@ func (a *app) get(ctx context.Context, args []string) error {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	out := tableWriter()
+	defer out.Flush()
 	for _, k := range keys {
-		fmt.Printf("%s\t%s\n", k, vals[k])
+		fmt.Fprintf(out, "%s\t%s\n", k, vals[k])
 	}
 	return nil
 }
@@ -676,3 +708,19 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 		args = fs.Args()[1:]
 	}
 }
+
+// tableWriter aligns tab-separated columns on a terminal and leaves them
+// as plain tabs when the output is piped, for scripts.
+func tableWriter() interface {
+	io.Writer
+	Flush() error
+} {
+	if isatty.IsTerminal(os.Stdout.Fd()) {
+		return tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	}
+	return nopFlusher{os.Stdout}
+}
+
+type nopFlusher struct{ io.Writer }
+
+func (nopFlusher) Flush() error { return nil }
