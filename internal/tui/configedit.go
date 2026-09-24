@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/rnsc/vaultr/internal/config"
 )
@@ -175,9 +176,12 @@ func (m model) viewConfig() string {
 	var b strings.Builder
 	state := ""
 	if !c.exists {
-		state = sWarn.Render("  (new file)")
+		state = "  " + sWarn.Render("(new file)")
 	}
-	b.WriteString(sTitle.Render("Settings") + sSubtle.Render("  "+c.path) + state + "\n")
+	// The state comes before the path, which is shortened from the left so
+	// both stay visible on narrow terminals and with long paths.
+	room := m.width - lipgloss.Width("Settings"+state) - 2
+	b.WriteString(sTitle.Render("Settings") + state + sSubtle.Render("  "+shortenLeft(c.path, room)) + "\n")
 	if c.note != "" {
 		b.WriteString(" " + sWarn.Render(wordWrap(c.note, m.width-2)) + "\n")
 	}
@@ -264,4 +268,13 @@ func (m model) cfgFieldHelp() string {
 		h += " Comma separated."
 	}
 	return h
+}
+
+// shortenLeft keeps the end of s (the file name) within width runes.
+func shortenLeft(s string, width int) string {
+	r := []rune(s)
+	if width <= 1 || len(r) <= width {
+		return s
+	}
+	return "…" + string(r[len(r)-width+1:])
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/rnsc/vaultr/internal/auth"
 	"github.com/rnsc/vaultr/internal/cache"
 	"github.com/rnsc/vaultr/internal/config"
@@ -291,5 +293,16 @@ func TestNoMatchOffersRefresh(t *testing.T) {
 	m = press(t, m, "enter")
 	if builds != 1 || m.mode != modeDetail {
 		t.Errorf("enter with a match: builds %d mode %v", builds, m.mode)
+	}
+}
+
+func TestConfigEditorLongPath(t *testing.T) {
+	fb := newFakeBackend(t)
+	fb.settings.Path = "/var/folders/xy/" + strings.Repeat("very-long-directory-name/", 8) + "config.toml"
+	m := newTest(t, Options{Backend: fb, Entries: testEntries})
+	m = press(t, m, "ctrl+e")
+	first := strings.SplitN(plain(m.View()), "\n", 2)[0]
+	if !strings.Contains(first, "(new file)") || !strings.HasSuffix(strings.TrimSpace(first), "config.toml") || lipgloss.Width(first) > 100 {
+		t.Errorf("title line %q", first)
 	}
 }
