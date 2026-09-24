@@ -36,6 +36,29 @@ type File struct {
 	PathsOnly      bool     `toml:"paths_only"`
 	ClipClear      string   `toml:"clip_clear"`
 	CacheDir       string   `toml:"cache_dir"`
+	Auth           Auth     `toml:"auth"`
+}
+
+// Auth holds login defaults for `vaultr login` and the TUI login screen.
+type Auth struct {
+	Method       string  `toml:"method"`
+	Mount        string  `toml:"mount"`
+	Role         string  `toml:"role"`
+	Username     string  `toml:"username"`
+	Namespace    *string `toml:"namespace"`
+	CallbackPort int     `toml:"callback_port"`
+	SaveToken    *bool   `toml:"save_token"`
+}
+
+// AuthSettings are the resolved login defaults.
+type AuthSettings struct {
+	Method       string // "" = ask (the TUI starts on oidc)
+	Mount        string // "" = the method name
+	Role         string
+	Username     string
+	Namespace    string // where to log in; "" = root
+	CallbackPort int
+	SaveToken    bool
 }
 
 // Settings are the resolved values.
@@ -47,56 +70,13 @@ type Settings struct {
 	PathsOnly bool
 	ClipClear time.Duration
 	CacheDir  string
+	Auth      AuthSettings
 
 	Path      string            // config file path consulted
 	Found     bool              // whether it exists
 	Source    map[string]string // setting name -> where its value came from
 	TokenFile string            // ~/.vault-token path consulted
 }
-
-// Template is written by `vaultr config init`.
-const Template = `# vaultr configuration. Environment variables take precedence over
-# these values. The Vault token is never read from this file: use
-# VAULT_TOKEN or ~/.vault-token (written by "vault login").
-
-# Vault server. Overridden by VAULT_ADDR (or VAULT_URL).
-# address = "https://vault.example.com"
-
-# Namespace holding your secrets (Vault Enterprise / OpenBao). Overridden
-# by VAULT_NAMESPACE; set VAULT_NAMESPACE=/ to force the root namespace.
-# namespace = "team-a"
-
-# Namespace your token was issued in, when you log in somewhere else than
-# the secrets namespace (e.g. login at the root, secrets in "team-a").
-# Detected automatically; set it only if detection picks the wrong one.
-# "/" or "" is the root namespace. Overridden by VAULTR_TOKEN_NAMESPACE.
-# token_namespace = "/"
-
-# TLS. Overridden by VAULT_CACERT, VAULT_CLIENT_CERT, VAULT_CLIENT_KEY.
-# ca_cert = "/etc/ssl/vault-ca.pem"
-# client_cert = ""
-# client_key = ""
-
-# KV mounts to index. Empty means discover every KV mount the token sees.
-# Overridden by VAULTR_MOUNTS (comma separated).
-# mounts = ["secret", "kv-team"]
-
-# Concurrent requests while indexing. VAULTR_WORKERS.
-# workers = 32
-
-# Cache lifetime, capped at 2h. VAULTR_MAX_AGE.
-# max_age = "2h"
-
-# Index paths only, without reading key names. VAULTR_PATHS_ONLY.
-# paths_only = false
-
-# Clear copied values from the clipboard after this long ("0" disables).
-# VAULTR_CLIP_CLEAR.
-# clip_clear = "45s"
-
-# Where the encrypted index lives. VAULTR_CACHE_DIR.
-# cache_dir = ""
-`
 
 // DefaultPath returns the config file location: $VAULTR_CONFIG, else
 // $XDG_CONFIG_HOME/vaultr/config.toml, else ~/.config/vaultr/config.toml
@@ -296,13 +276,29 @@ func Load() (*Settings, error) {
 		}
 		s.CacheDir = filepath.Join(d, "vaultr")
 	}
+
+	// Login defaults.
+	a := f.Auth
+	s.Auth = AuthSettings{Method: a.Method, Mount: a.Mount, Role: a.Role, Username: a.Username, CallbackPort: a.CallbackPort, SaveToken: true}
+	switch {
+	case a.Namespace != nil:
+		s.Auth.Namespace = strings.Trim(*a.Namespace, "/")
+	case v.TokenNamespace != nil:
+		s.Auth.Namespace = *v.TokenNamespace
+	}
+	if a.SaveToken != nil {
+		s.Auth.SaveToken = *a.SaveToken
+	}
+	if err := validateAuth(a); err != nil {
+		return nil, fmt.Errorf("%s: %w", s.Path, err)
+	}
 	return s, nil
 }
 
 // RequireToken fails when no token was found.
 func (s *Settings) RequireToken() error {
 	if s.Vault.Token == "" {
-		return errors.New("no Vault token: set VAULT_TOKEN or run `vault login`")
+		return errors.New("no Vault token: run `vaultr login` (or `vault login`, or set VAULT_TOKEN)")
 	}
 	return nil
 }

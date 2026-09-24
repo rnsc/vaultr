@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,11 @@ import (
 )
 
 var (
+	idp           *testvault.FakeIDP
+	userpassMount string // root-namespace userpass: alice / alice-pass
+	oidcMount     string // root-namespace OIDC backed by idp
+	admin         *testvault.Admin
+
 	nsx     *testvault.Namespaces // nil when the server has no namespaces
 	addr    string
 	root    *vault.Client
@@ -80,6 +86,30 @@ func run(m *testing.M) int {
 		return 1
 	default:
 		defer nsx.Teardown(context.Background())
+	}
+
+	admin = &testvault.Admin{Addr: addr, Token: tok}
+	if idp, err = testvault.NewFakeIDP(); err != nil {
+		fmt.Fprintln(os.Stderr, "fake idp:", err)
+		return 1
+	}
+	defer idp.Close()
+	userpassMount, oidcMount = fx.Prefix+"-userpass", fx.Prefix+"-oidc"
+	if err := testvault.EnableUserpass(ctx, admin, "", userpassMount, "alice", "alice-pass", []string{fx.Reader}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer testvault.DisableAuth(context.Background(), admin, "", userpassMount)
+	if err := testvault.EnableOIDC(ctx, admin, "", oidcMount, idp.URL, idp.ClientID, idp.ClientSecret); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer testvault.DisableAuth(context.Background(), admin, "", oidcMount)
+	if nsx != nil {
+		if err := testvault.EnableUserpass(ctx, admin, nsx.Parent, "userpass", "bob", "bob-pass", []string{"reader"}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 
 	dir, err := os.MkdirTemp("", "vaultr-it-")
@@ -170,7 +200,14 @@ type result struct {
 
 func (c *cli) run(args ...string) result {
 	c.t.Helper()
+	return c.runIn("", args...)
+}
+
+// runIn runs vaultr with stdin.
+func (c *cli) runIn(stdin string, args ...string) result {
+	c.t.Helper()
 	cmd := exec.Command(binPath, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	for k, v := range c.env {
 		cmd.Env = append(cmd.Env, k+"="+v)

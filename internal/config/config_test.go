@@ -211,7 +211,7 @@ func TestDefaultPath(t *testing.T) {
 }
 
 func TestTemplateIsValidAndInert(t *testing.T) {
-	isolate(t, nil, Template)
+	isolate(t, nil, string(Template()))
 	s := load(t)
 	if !s.Found || s.Vault.Addr != "https://127.0.0.1:8200" || s.Workers != 32 {
 		t.Errorf("template should parse and change nothing: %+v", s)

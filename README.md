@@ -51,6 +51,8 @@ vaultr find stripe k:key        # print "path<TAB>key" lines (exit 1 if none)
 vaultr find --values ldap       # also fetch the matching values
 vaultr find --json -n 20 redis  # JSON lines
 vaultr get secret/prod/db password
+vaultr login                    # log in with the [auth] defaults from the config
+vaultr login -method ldap -username jdoe
 vaultr index                    # force a rebuild
 vaultr status                   # cache age, expiry, binding
 vaultr purge                    # delete cache and its key
@@ -70,15 +72,18 @@ then the last path segment.
 
 ### TUI keys
 
-| List              |                        | Secret view          |                   |
-|-------------------|------------------------|----------------------|-------------------|
-| type              | filter                 | `↑` `↓`              | select key        |
-| `↑` `↓` / `^n` `^p` | move                 | `r` / space          | reveal / hide     |
-| `enter`           | open the secret        | `enter` / `c`        | copy value        |
-| `^y`              | copy the row's value   | `y`                  | copy path         |
-| `^o`              | copy the path          | `R`                  | reload            |
-| `^r`              | rebuild the index      | `esc`                | back              |
-| `esc` / `^c`      | quit                   |                      |                   |
+| Search list         |                                   | Secret view     |               |
+|---------------------|-----------------------------------|-----------------|---------------|
+| type                | filter                            | `↑` `↓`         | select key    |
+| `↑` `↓` / `^n` `^p` | move                              | `r` / space     | reveal / hide |
+| `enter`             | open the secret                   | `enter` / `c`   | copy value    |
+| `^y`                | copy the row's value              | `y`             | copy path     |
+| `^o`                | copy the path                     | `R`             | reload        |
+| `^r`                | rebuild the index                 | `esc`           | back          |
+| `^l`                | log in (again)                    | `^c`            | quit          |
+| `^e`                | edit the config file              |                 |               |
+| `esc`               | clear the search (never quits)    |                 |               |
+| `^c`                | clear the search, or quit if it's empty |           |               |
 
 Copying uses the system clipboard (pbcopy, xclip, xsel, wl-copy). If none is
 available it falls back to OSC 52, which works over SSH in most terminals.
@@ -139,6 +144,52 @@ back to `sys/mounts`. Set `mounts` to skip discovery.
 Paths the token can't list or read are skipped and counted as "denied".
 Paths that can be listed but not read are still indexed, just without key
 names.
+
+### Logging in
+
+`vaultr login` and the TUI's login screen (`^l`, or opened automatically
+when there's no token or it has expired) support four methods:
+
+| Method     | What happens                                                                 |
+|------------|------------------------------------------------------------------------------|
+| `oidc`     | Opens your browser at the identity provider, like `vault login -method=oidc`. A local callback on `localhost:8250` receives the result. |
+| `ldap`     | Username and password (the password is never echoed or stored).              |
+| `userpass` | Username and password.                                                       |
+| `token`    | Paste an existing token; vaultr checks it before using it.                   |
+
+The token is saved to `~/.vault-token` with mode 0600, like `vault login`
+does, so the `vault` CLI and later vaultr runs pick it up. Set
+`save_token = false` to keep it in memory only. `vaultr login -no-save`
+prints it instead. If `VAULT_TOKEN` is set in your environment, vaultr
+warns you, because that variable overrides the saved file in new shells.
+
+Defaults come from the `[auth]` section of the config file, so logging in
+is usually just `vaultr login` (or enter on the login screen):
+
+```toml
+[auth]
+method   = "oidc"
+role     = ""        # the mount's default role
+# mount  = "oidc"    # if your auth mount has another path, e.g. "corp-oidc"
+# namespace = "/"    # where to log in; defaults to token_namespace, else root
+# username = "jdoe"  # for ldap / userpass
+# callback_port = 8250
+```
+
+Your OIDC role must allow the redirect URI
+`http://localhost:8250/oidc/callback`, the same one the `vault` CLI uses.
+Flags override the config: `-method`, `-mount`, `-namespace`,
+`-username`, `-role`, `-callback-port`.
+
+### Editing the config in the TUI
+
+Press `^e` to edit the config file. It's created, with its directory, if
+it doesn't exist. Move with `↑` `↓`, type to change a value, and use `←` `→`
+or space for choices and on/off settings. `^s` validates, saves and applies
+the settings. `esc` discards your changes. Settings that an environment
+variable currently overrides are flagged, so you can see why a change
+doesn't take effect. The file is rewritten with a comment for every
+setting, so comments you added by hand are not kept.
 
 ### Namespaces
 
@@ -252,7 +303,11 @@ VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./in
   - the built `vaultr` binary end to end: every command, flag and setting,
     exit codes and error messages
   - the TUI, driven through a real pseudo-terminal: search, reveal,
-    reindex, quit
+    reindex, clearing the search, logging in, and creating the config file
+    in the editor
+  - `vaultr login` with userpass, token and OIDC. OIDC runs against a
+    fake identity provider (`internal/testvault/fakeidp.go`) that Vault
+    itself validates, with `curl` playing the browser.
   - namespaces, on OpenBao: nested namespaces, and logging in at the root
     namespace while reading secrets in a team namespace, both from the CLI
     and the TUI

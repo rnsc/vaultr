@@ -112,6 +112,7 @@ const (
 	keyEnter = "\r"
 	keyEsc   = "\x1b"
 	keyCtrlR = "\x12"
+	keyCtrlC = "\x03"
 )
 
 func TestTUISearchRevealQuit(t *testing.T) {
@@ -141,7 +142,8 @@ func TestTUISearchRevealQuit(t *testing.T) {
 	m = tm.mark()
 	tm.send(keyCtrlR)
 	tm.waitFor(m, "indexed ")
-	tm.send(keyEsc)
+	tm.send(keyCtrlC) // clears "stripe webhook"
+	tm.send(keyCtrlC) // quits
 	tm.waitExit()
 
 	// The TUI left a valid cache behind for the CLI.
@@ -165,8 +167,9 @@ func TestTUICrossNamespace(t *testing.T) {
 	m = tm.mark()
 	tm.send("r")
 	tm.waitFor(m, "ns-parent-pass")
-	tm.send(keyEsc)
-	tm.send(keyEsc)
+	tm.send(keyEsc)   // back to the list
+	tm.send(keyCtrlC) // clears the search
+	tm.send(keyCtrlC) // quits
 	tm.waitExit()
 
 	st := c.ok("status").stdout
@@ -175,24 +178,14 @@ func TestTUICrossNamespace(t *testing.T) {
 	}
 }
 
-func TestTUIBuildFailureExitsWithError(t *testing.T) {
+func TestTUIInvalidTokenOpensLogin(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t, "hvs.invalid")
 	tm := startTUI(t, c)
-	errc := make(chan error, 1)
-	go func() { errc <- tm.cmd.Wait() }()
-	select {
-	case err := <-errc:
-		if err == nil {
-			t.Error("TUI exited 0 with an invalid token")
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("TUI did not exit")
-	}
-	<-tm.done
-	if !strings.Contains(tm.text(), "expired or invalid") {
-		t.Errorf("no error shown:\n%s", tm.text())
-	}
+	tm.waitFor(0, "Log in to Vault")
+	tm.waitFor(0, "expired or revoked")
+	tm.send(keyCtrlC)
+	tm.waitExit()
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
