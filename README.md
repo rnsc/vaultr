@@ -4,6 +4,10 @@ Fast keyword search over HashiCorp Vault KV secrets. It searches every
 path and every key name across all KV mounts. Values are fetched live, only
 when you ask for them.
 
+![vaultr TUI: search, reveal a value, refresh the index](demo/tui.gif)
+
+![vaultr CLI: find, get, and refresh](demo/cli.gif)
+
 - **Recursive index** of every KV v1/v2 mount the token can see (concurrent crawl).
 - **Instant search**: all terms must match a path or a key name. `k:` / `p:` limit a term to keys or paths.
 - **TUI** for browsing and copying. The **CLI** (`find`, `get`) works for scripts and pipes.
@@ -50,7 +54,11 @@ vaultr prod db                  # interactive, pre-filled query
 vaultr find stripe k:key        # print "path<TAB>key" lines (exit 1 if none)
 vaultr find --values ldap       # also fetch the matching values
 vaultr find --json -n 20 redis  # JSON lines
+vaultr find -r paypal           # refresh the index first (secret added since)
+vaultr -r                       # TUI, refreshing the index at startup
 vaultr get secret/prod/db password
+vaultr login                    # log in with the [auth] defaults from the config
+vaultr login -method ldap -username jdoe
 vaultr index                    # force a rebuild
 vaultr status                   # cache age, expiry, binding
 vaultr purge                    # delete cache and its key
@@ -68,17 +76,36 @@ vaultr purge                    # delete cache and its key
 Matching is case-insensitive. Exact key names rank first, then key prefixes,
 then the last path segment.
 
+### Finding secrets added recently
+
+The index is a snapshot, rebuilt at most every 2 hours. If a secret was
+added since, refresh it:
+
+- **TUI:** when nothing matches, the list says so and shows how old the
+  index is. Press `enter` (or `^r` at any time) to refresh it; your search
+  stays in place. `vaultr -r` refreshes at startup.
+- **CLI:** `vaultr find -r QUERY` refreshes before searching. Without
+  `-r`, a search with no results says how old the index is and suggests
+  the `-r` retry. `vaultr refresh` (or `vaultr index`) refreshes without
+  searching.
+
+A refresh re-crawls every mount, which takes about a second for a few
+thousand secrets.
+
 ### TUI keys
 
-| List              |                        | Secret view          |                   |
-|-------------------|------------------------|----------------------|-------------------|
-| type              | filter                 | `↑` `↓`              | select key        |
-| `↑` `↓` / `^n` `^p` | move                 | `r` / space          | reveal / hide     |
-| `enter`           | open the secret        | `enter` / `c`        | copy value        |
-| `^y`              | copy the row's value   | `y`                  | copy path         |
-| `^o`              | copy the path          | `R`                  | reload            |
-| `^r`              | rebuild the index      | `esc`                | back              |
-| `esc` / `^c`      | quit                   |                      |                   |
+| Search list         |                                   | Secret view     |               |
+|---------------------|-----------------------------------|-----------------|---------------|
+| type                | filter                            | `↑` `↓`         | select key    |
+| `↑` `↓` / `^n` `^p` | move                              | `r` / space     | reveal / hide |
+| `enter`             | open the secret (refresh the index when nothing matches) | `enter` / `c`   | copy value    |
+| `^y`                | copy the row's value              | `y`             | copy path     |
+| `^o`                | copy the path                     | `R`             | reload        |
+| `^r`                | refresh the index                 | `esc`           | back          |
+| `^l`                | log in (again)                    | `^c`            | quit          |
+| `^e`                | edit the config file              |                 |               |
+| `esc`               | clear the search (never quits)    |                 |               |
+| `^c`                | clear the search, or quit if it's empty |           |               |
 
 Copying uses the system clipboard (pbcopy, xclip, xsel, wl-copy). If none is
 available it falls back to OSC 52, which works over SSH in most terminals.
@@ -139,6 +166,52 @@ back to `sys/mounts`. Set `mounts` to skip discovery.
 Paths the token can't list or read are skipped and counted as "denied".
 Paths that can be listed but not read are still indexed, just without key
 names.
+
+### Logging in
+
+`vaultr login` and the TUI's login screen (`^l`, or opened automatically
+when there's no token or it has expired) support four methods:
+
+| Method     | What happens                                                                 |
+|------------|------------------------------------------------------------------------------|
+| `oidc`     | Opens your browser at the identity provider, like `vault login -method=oidc`. A local callback on `localhost:8250` receives the result. |
+| `ldap`     | Username and password (the password is never echoed or stored).              |
+| `userpass` | Username and password.                                                       |
+| `token`    | Paste an existing token; vaultr checks it before using it.                   |
+
+The token is saved to `~/.vault-token` with mode 0600, like `vault login`
+does, so the `vault` CLI and later vaultr runs pick it up. Set
+`save_token = false` to keep it in memory only. `vaultr login -no-save`
+prints it instead. If `VAULT_TOKEN` is set in your environment, vaultr
+warns you, because that variable overrides the saved file in new shells.
+
+Defaults come from the `[auth]` section of the config file, so logging in
+is usually just `vaultr login` (or enter on the login screen):
+
+```toml
+[auth]
+method   = "oidc"
+role     = ""        # the mount's default role
+# mount  = "oidc"    # if your auth mount has another path, e.g. "corp-oidc"
+# namespace = "/"    # where to log in; defaults to token_namespace, else root
+# username = "jdoe"  # for ldap / userpass
+# callback_port = 8250
+```
+
+Your OIDC role must allow the redirect URI
+`http://localhost:8250/oidc/callback`, the same one the `vault` CLI uses.
+Flags override the config: `-method`, `-mount`, `-namespace`,
+`-username`, `-role`, `-callback-port`.
+
+### Editing the config in the TUI
+
+Press `^e` to edit the config file. It's created, with its directory, if
+it doesn't exist. Move with `↑` `↓`, type to change a value, and use `←` `→`
+or space for choices and on/off settings. `^s` validates, saves and applies
+the settings. `esc` discards your changes. Settings that an environment
+variable currently overrides are flagged, so you can see why a change
+doesn't take effect. The file is rewritten with a comment for every
+setting, so comments you added by hand are not kept.
 
 ### Namespaces
 
@@ -252,7 +325,11 @@ VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./in
   - the built `vaultr` binary end to end: every command, flag and setting,
     exit codes and error messages
   - the TUI, driven through a real pseudo-terminal: search, reveal,
-    reindex, quit
+    reindex, clearing the search, logging in, and creating the config file
+    in the editor
+  - `vaultr login` with userpass, token and OIDC. OIDC runs against a
+    fake identity provider (`internal/testvault/fakeidp.go`) that Vault
+    itself validates, with `curl` playing the browser.
   - namespaces, on OpenBao: nested namespaces, and logging in at the root
     namespace while reading secrets in a team namespace, both from the CLI
     and the TUI
@@ -270,6 +347,24 @@ to `main`:
 
 `ci-ok` is a single job that sums up the others, to use as the required
 check for branch protection.
+
+## Demo GIFs
+
+The GIFs above are recorded with [VHS](https://github.com/charmbracelet/vhs)
+from `demo/tui.tape` and `demo/cli.tape`, against a throwaway dev server
+loaded with fake demo secrets (`go run ./tools/seed -demo`).
+
+`.github/workflows/demo.yml` keeps them current. On a pull request that
+changes something they show (Go code, the tapes, the demo scripts), it
+re-records them on the runner and commits them to the PR branch. GitHub
+creates that commit through its API and signs it, so it shows as
+**Verified**. Then it starts CI on the new commit. When the PR merges,
+`main` and the release it triggers already have the updated GIFs. A hash
+of the inputs (`demo/inputs.sha256`) is stored with them, so PRs that
+don't touch those inputs skip the recording.
+
+To record them locally, install `vhs`, `ttyd` and `ffmpeg` and run
+`make demo`.
 
 ## Releases
 

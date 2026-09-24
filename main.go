@@ -2,20 +2,25 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/mattn/go-isatty"
+	"golang.org/x/term"
 
+	"github.com/rnsc/vaultr/internal/auth"
 	"github.com/rnsc/vaultr/internal/cache"
 	"github.com/rnsc/vaultr/internal/config"
 	"github.com/rnsc/vaultr/internal/index"
@@ -32,12 +37,16 @@ var errNoMatch = errors.New("no match")
 const usage = `vaultr: search Vault KV paths and key names, fetch values on demand.
 
 Usage:
-  vaultr [QUERY...]              interactive search (TUI)
-  vaultr find [flags] QUERY...   print matching path/key pairs
+  vaultr [-r] [QUERY...]         interactive search (TUI); -r refreshes the
+                                 index first
+  vaultr find [flags] QUERY...   print matching path/key pairs (-r refreshes
+                                 the index first)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
-  vaultr index                   rebuild the local index now
+  vaultr index                   refresh the local index now (also: refresh)
   vaultr status                  show cache state
   vaultr purge                   delete the local index and its key
+  vaultr login [flags]           log in (oidc, ldap, userpass, token) and
+                                 save the token to ~/.vault-token
   vaultr config [show|path|init] show settings, or write a config template
   vaultr version
 
@@ -50,7 +59,8 @@ Connection uses the standard VAULT_ADDR (or VAULT_URL), VAULT_TOKEN (or
 VAULT_CLIENT_KEY and VAULT_SKIP_VERIFY variables.
 
 Settings can also live in ~/.config/vaultr/config.toml (see "vaultr config
-init"); environment variables take precedence over the file.
+init", or press ctrl+e in the TUI); environment variables take precedence
+over the file. Its [auth] section sets the defaults for "vaultr login".
 
 Settings:
   VAULTR_CONFIG      config file path
@@ -93,11 +103,22 @@ func run(ctx context.Context, args []string) error {
 		return configCmd(args[1:])
 	}
 
-	a, err := newApp()
+	refresh := false
+	if cmd == "-r" || cmd == "--refresh" {
+		refresh, args = true, args[1:]
+		cmd = ""
+		if len(args) > 0 {
+			cmd = args[0]
+		}
+	}
+	interactive := cmd == "" || !isCommand(cmd)
+	a, err := newApp(!interactive && cmd != "login")
 	if err != nil {
 		return err
 	}
 	switch cmd {
+	case "login":
+		return a.login(ctx, args[1:])
 	case "find", "search", "f":
 		return a.find(ctx, args[1:])
 	case "get", "g":
@@ -117,10 +138,11 @@ func run(ctx context.Context, args []string) error {
 	if strings.HasPrefix(cmd, "-") {
 		return fmt.Errorf("unknown flag %s (see vaultr help)", cmd)
 	}
-	return a.interactive(ctx, strings.Join(args, " "))
+	return a.interactive(ctx, strings.Join(args, " "), refresh)
 }
 
 type app struct {
+	settings  *config.Settings
 	client    *vault.Client
 	store     *cache.Store
 	maxAge    time.Duration
@@ -130,28 +152,214 @@ type app struct {
 	clipClear time.Duration
 }
 
-func newApp() (*app, error) {
+// newApp loads settings and builds the client. Only the TUI and `login`
+// can start without a token.
+func newApp(requireToken bool) (*app, error) {
 	s, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	if err := s.RequireToken(); err != nil {
-		return nil, err
+	if requireToken {
+		if err := s.RequireToken(); err != nil {
+			return nil, err
+		}
 	}
 	c, err := vault.New(s.Vault)
 	if err != nil {
 		return nil, err
 	}
-	return &app{
-		client:    c,
-		store:     &cache.Store{Dir: s.CacheDir, Client: c},
-		maxAge:    s.MaxAge,
-		workers:   s.Workers,
-		pathsOnly: s.PathsOnly,
-		mounts:    s.Mounts,
-		clipClear: s.ClipClear,
-	}, nil
+	a := &app{}
+	a.apply(s, c)
+	return a, nil
 }
+
+func (a *app) apply(s *config.Settings, c *vault.Client) {
+	a.settings = s
+	a.client = c
+	a.store = &cache.Store{Dir: s.CacheDir, Client: c}
+	a.maxAge = s.MaxAge
+	a.workers = s.Workers
+	a.pathsOnly = s.PathsOnly
+	a.mounts = s.Mounts
+	a.clipClear = s.ClipClear
+}
+
+// Client, Settings, LoadCache, Build, Login and Reload implement
+// tui.Backend.
+func (a *app) Client() *vault.Client      { return a.client }
+func (a *app) Settings() *config.Settings { return a.settings }
+
+func (a *app) LoadCache(ctx context.Context) ([]index.Entry, cache.Header, error) {
+	return a.store.Load(ctx)
+}
+
+func (a *app) Build(ctx context.Context, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+	return a.buildIndex(ctx, onProgress)
+}
+
+// Login logs in, switches the client to the new token, and saves it to
+// ~/.vault-token when configured to. It returns a short summary and a
+// warning, either possibly empty.
+func (a *app) Login(ctx context.Context, r auth.Request) (string, string, error) {
+	res, err := auth.Login(ctx, a.client, r)
+	if err != nil {
+		return "", "", err
+	}
+	a.client.SetToken(res.Token, res.Namespace)
+	summary := "logged in"
+	if res.Namespace != "" {
+		summary += " to namespace " + res.Namespace
+	}
+	if res.TTL > 0 {
+		summary += ", token valid for " + res.TTL.Round(time.Minute).String()
+	}
+	var warn string
+	if a.settings.Auth.SaveToken {
+		w, err := auth.SaveToken(res.Token)
+		if err != nil {
+			warn = "could not save the token to ~/.vault-token: " + err.Error()
+		} else {
+			warn = w
+		}
+	}
+	return summary, warn, nil
+}
+
+// Reload re-reads the config file and environment, keeping the current
+// token (which may come from a login in this session).
+func (a *app) Reload() error {
+	s, err := config.Load()
+	if err != nil {
+		return err
+	}
+	tok := a.client.Token()
+	ns, by, known := a.client.KnownTokenNamespace()
+	if tok != "" {
+		s.Vault.Token = tok
+	}
+	c, err := vault.New(s.Vault)
+	if err != nil {
+		return err
+	}
+	if known && by == "login" {
+		c.SetToken(tok, ns)
+	}
+	a.apply(s, c)
+	return nil
+}
+
+// LoginRequest fills a login request from the configured defaults.
+func LoginRequest(s config.AuthSettings) auth.Request {
+	m, err := auth.ParseMethod(s.Method)
+	if err != nil {
+		m = auth.OIDC
+	}
+	return auth.Request{
+		Method:       m,
+		Mount:        s.Mount,
+		Namespace:    s.Namespace,
+		Username:     s.Username,
+		Role:         s.Role,
+		CallbackPort: s.CallbackPort,
+	}
+}
+
+func (a *app) login(ctx context.Context, args []string) error {
+	r := LoginRequest(a.settings.Auth)
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	method := fs.String("method", string(r.Method), "oidc, ldap, userpass or token")
+	fs.StringVar(&r.Mount, "mount", r.Mount, "auth mount path (default: the method name)")
+	ns := fs.String("namespace", nsFlag(r.Namespace), `namespace to log in to ("/" = root)`)
+	fs.StringVar(&r.Username, "username", r.Username, "username (ldap, userpass)")
+	fs.StringVar(&r.Role, "role", r.Role, "OIDC role")
+	fs.IntVar(&r.CallbackPort, "callback-port", r.CallbackPort, "OIDC callback port (default 8250)")
+	noSave := fs.Bool("no-save", false, "print the token instead of saving it to ~/.vault-token")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return fmt.Errorf("login: unexpected argument %q", pos[0])
+	}
+	m, err := auth.ParseMethod(*method)
+	if err != nil {
+		return err
+	}
+	r.Method = m
+	r.Namespace = strings.Trim(*ns, "/")
+	if *noSave {
+		a.settings.Auth.SaveToken = false
+	}
+
+	switch r.Method {
+	case auth.LDAP, auth.Userpass:
+		if r.Username == "" {
+			if r.Username, err = prompt("Username: ", false); err != nil {
+				return err
+			}
+		}
+		if r.Password, err = prompt("Password: ", true); err != nil {
+			return err
+		}
+	case auth.Token:
+		if r.Token, err = prompt("Token: ", true); err != nil {
+			return err
+		}
+	case auth.OIDC:
+		r.OpenURL = func(u string) {
+			fmt.Fprintf(os.Stderr, "Complete the login in your browser. If it did not open, visit:\n\n  %s\n\n", u)
+			_ = auth.OpenBrowser(u)
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
+	summary, warn, err := a.Login(ctx, r)
+	if err != nil {
+		return err
+	}
+	where := ""
+	if a.settings.Auth.SaveToken {
+		where = ", token saved to ~/.vault-token"
+	}
+	fmt.Fprintf(os.Stderr, "%s%s\n", strings.ToUpper(summary[:1])+summary[1:], where)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "warning:", warn)
+	}
+	if !a.settings.Auth.SaveToken {
+		// Nothing persisted: hand the token to the caller.
+		fmt.Println(a.client.Token())
+	}
+	return nil
+}
+
+func nsFlag(ns string) string {
+	if ns == "" {
+		return "/"
+	}
+	return ns
+}
+
+// prompt reads a line from the terminal (without echo when secret), or
+// from stdin when it is not a terminal.
+func prompt(label string, secret bool) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		fmt.Fprint(os.Stderr, label)
+		if secret {
+			b, err := term.ReadPassword(fd)
+			fmt.Fprintln(os.Stderr)
+			return strings.TrimSpace(string(b)), err
+		}
+	}
+	line, err := stdinReader.ReadString('\n')
+	if err != nil && line == "" {
+		return "", fmt.Errorf("reading %s%w", strings.ToLower(label), err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
+var stdinReader = bufio.NewReader(os.Stdin)
 
 func configCmd(args []string) error {
 	sub := ""
@@ -177,13 +385,21 @@ func configCmd(args []string) error {
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, []byte(config.Template), 0o600); err != nil {
+		if err := os.WriteFile(p, config.Template(), 0o600); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stderr, "wrote", p)
 		return nil
 	}
 	return fmt.Errorf("unknown config command %q (show, path, init)", sub)
+}
+
+func isCommand(cmd string) bool {
+	switch cmd {
+	case "find", "search", "f", "get", "g", "index", "reindex", "refresh", "status", "purge", "login":
+		return true
+	}
+	return strings.HasPrefix(cmd, "-")
 }
 
 func (a *app) kvMounts(ctx context.Context) ([]vault.Mount, error) {
@@ -211,8 +427,8 @@ func (a *app) kvMounts(ctx context.Context) ([]vault.Mount, error) {
 // buildIndex crawls and saves. It never prints.
 func (a *app) buildIndex(ctx context.Context, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
 	if _, err := a.client.LookupSelf(ctx); err != nil {
-		if errors.Is(err, vault.ErrForbidden) {
-			err = errors.New("token is expired or invalid, run `vault login`")
+		if errors.Is(err, vault.ErrTokenInvalid) {
+			err = fmt.Errorf("%w; run `vaultr login`", vault.ErrTokenInvalid)
 		}
 		return nil, cache.Header{}, "", err
 	}
@@ -283,22 +499,32 @@ func (a *app) load(ctx context.Context) ([]index.Entry, cache.Header, error) {
 	return a.build(ctx, false)
 }
 
-func (a *app) interactive(ctx context.Context, query string) error {
+func (a *app) interactive(ctx context.Context, query string, refresh bool) error {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
+		if err := a.settings.RequireToken(); err != nil {
+			return err
+		}
 		return a.find(ctx, strings.Fields(query))
 	}
-	entries, h, err := a.store.Load(ctx)
-	if err != nil && !errors.Is(err, cache.ErrStale) {
-		return err
+	opt := tui.Options{Backend: a, Query: query}
+	if a.client.Token() == "" {
+		opt.Login = "No Vault token found."
+		return tui.Run(opt)
 	}
-	return tui.Run(tui.Options{
-		Client:    a.client,
-		Entries:   entries, // nil triggers a build inside the TUI
-		Header:    h,
-		Build:     a.buildIndex,
-		Query:     query,
-		ClipClear: a.clipClear,
-	})
+	if refresh {
+		return tui.Run(opt) // no entries: the TUI rebuilds first
+	}
+	entries, h, err := a.store.Load(ctx)
+	switch {
+	case err == nil:
+		opt.Entries, opt.Header = entries, h
+	case errors.Is(err, cache.ErrStale):
+		// The TUI builds the index (and asks to log in if the token is bad).
+	default:
+		// Server unreachable or similar: let the TUI show it and offer the
+		// config editor rather than exiting.
+	}
+	return tui.Run(opt)
 }
 
 func (a *app) find(ctx context.Context, args []string) error {
@@ -306,6 +532,9 @@ func (a *app) find(ctx context.Context, args []string) error {
 	asJSON := fs.Bool("json", false, "output JSON lines")
 	limit := fs.Int("n", 0, "maximum results (0 = all)")
 	withValues := fs.Bool("values", false, "also fetch and print matching values (live from Vault)")
+	var refresh bool
+	fs.BoolVar(&refresh, "r", false, "refresh the index before searching (finds secrets added since)")
+	fs.BoolVar(&refresh, "refresh", false, "same as -r")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
@@ -314,12 +543,20 @@ func (a *app) find(ctx context.Context, args []string) error {
 	if strings.TrimSpace(q) == "" {
 		return errors.New("find: missing query")
 	}
-	entries, _, err := a.load(ctx)
+	var entries []index.Entry
+	var h cache.Header
+	if refresh {
+		entries, h, err = a.build(ctx, false)
+	} else {
+		entries, h, err = a.load(ctx)
+	}
 	if err != nil {
 		return err
 	}
 	rows := search.New(entries).Search(q, *limit)
 	enc := json.NewEncoder(os.Stdout)
+	out := tableWriter()
+	defer out.Flush()
 	secrets := map[string]map[string]string{}
 	for _, r := range rows {
 		var val *string
@@ -352,9 +589,13 @@ func (a *app) find(ctx context.Context, args []string) error {
 		if val != nil {
 			line += "\t" + *val
 		}
-		fmt.Println(line)
+		fmt.Fprintln(out, line)
 	}
 	if len(rows) == 0 {
+		if !refresh && isatty.IsTerminal(os.Stderr.Fd()) {
+			fmt.Fprintf(os.Stderr, "no match in the index built %s ago; added it recently? retry with: vaultr find -r %s\n",
+				time.Since(h.Created).Round(time.Second), q)
+		}
 		return errNoMatch
 	}
 	return nil
@@ -404,8 +645,10 @@ func (a *app) get(ctx context.Context, args []string) error {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	out := tableWriter()
+	defer out.Flush()
 	for _, k := range keys {
-		fmt.Printf("%s\t%s\n", k, vals[k])
+		fmt.Fprintf(out, "%s\t%s\n", k, vals[k])
 	}
 	return nil
 }
@@ -465,3 +708,19 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 		args = fs.Args()[1:]
 	}
 }
+
+// tableWriter aligns tab-separated columns on a terminal and leaves them
+// as plain tabs when the output is piped, for scripts.
+func tableWriter() interface {
+	io.Writer
+	Flush() error
+} {
+	if isatty.IsTerminal(os.Stdout.Fd()) {
+		return tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	}
+	return nopFlusher{os.Stdout}
+}
+
+type nopFlusher struct{ io.Writer }
+
+func (nopFlusher) Flush() error { return nil }

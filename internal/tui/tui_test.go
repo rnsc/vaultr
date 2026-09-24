@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -83,11 +83,10 @@ func (fc *fakeClipboard) get() string { fc.mu.Lock(); defer fc.mu.Unlock(); retu
 
 func newTest(t *testing.T, opt Options) model {
 	t.Helper()
-	if opt.Client == nil {
-		opt.Client = fakeVault(t, testSecrets)
+	if opt.Backend == nil {
+		opt.Backend = newFakeBackend(t)
 	}
 	m := newModel(opt)
-	m.input.Cursor.SetMode(cursor.CursorStatic) // no blink timers
 	return update(t, m, tea.WindowSizeMsg{Width: 100, Height: 20})
 }
 
@@ -305,7 +304,7 @@ func TestStaleSecretResponseIgnored(t *testing.T) {
 
 func TestQuickCopy(t *testing.T) {
 	fc := useFakeClipboard(t)
-	m := newTest(t, Options{Entries: testEntries, ClipClear: 45 * time.Second})
+	m := newTest(t, Options{Entries: testEntries})
 
 	m = typeText(t, m, "k:password")
 	m = press(t, m, "ctrl+y")
@@ -334,7 +333,7 @@ func TestQuickCopy(t *testing.T) {
 
 func TestClipboardAutoClear(t *testing.T) {
 	fc := useFakeClipboard(t)
-	m := newTest(t, Options{Entries: testEntries, ClipClear: time.Hour})
+	m := newTest(t, Options{Entries: testEntries})
 	_ = writeClipboard("secret-value")
 	m = update(t, m, clipClearMsg{value: "secret-value"})
 	if fc.get() != "" {
@@ -356,7 +355,9 @@ func TestInitialBuild(t *testing.T) {
 		<-release
 		return testEntries, cache.Header{Expires: time.Now().Add(time.Hour), KeyRef: "x"}, "", nil
 	}
-	m := newTest(t, Options{Build: build})
+	fb := newFakeBackend(t)
+	fb.build = build
+	m := newTest(t, Options{Backend: fb})
 	if m.mode != modeBuilding {
 		t.Fatal("not building without entries")
 	}
@@ -387,21 +388,33 @@ func TestInitialBuild(t *testing.T) {
 	}
 }
 
-func TestInitialBuildFailureQuits(t *testing.T) {
-	build := func(context.Context, func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
-		return nil, cache.Header{}, "", errors.New("token is expired")
+func TestInitialBuildFailureShowsBanner(t *testing.T) {
+	fb := newFakeBackend(t)
+	fb.build = func(context.Context, func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+		return nil, cache.Header{}, "", errors.New("dial tcp: connection refused")
 	}
-	m := newTest(t, Options{Build: build})
-	var quit bool
-	for _, msg := range runCmd(m.initCmd) {
-		if bm, ok := msg.(builtMsg); ok {
-			next, cmd := m.Update(bm)
-			m = next.(model)
-			_, quit = runCmd(cmd)[0].(tea.QuitMsg)
-		}
+	m := newTest(t, Options{Backend: fb})
+	m = settle(t, m, m.initCmd)
+	view := plain(m.View())
+	if m.mode != modeList || !strings.Contains(view, "Indexing failed: dial tcp: connection refused") || !strings.Contains(view, "^e to edit the config") {
+		t.Errorf("mode %v, view:\n%s", m.mode, view)
 	}
-	if !quit || m.fatal == nil || !strings.Contains(m.fatal.Error(), "token is expired") {
-		t.Errorf("quit %v fatal %v", quit, m.fatal)
+	// The user can go fix the config instead of being thrown out.
+	m = press(t, m, "ctrl+e")
+	if m.mode != modeConfig {
+		t.Errorf("ctrl+e did not open the config editor")
+	}
+}
+
+func TestInvalidTokenOpensLogin(t *testing.T) {
+	fb := newFakeBackend(t)
+	fb.build = func(context.Context, func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+		return nil, cache.Header{}, "", fmt.Errorf("%w; run `vaultr login`", vault.ErrTokenInvalid)
+	}
+	m := newTest(t, Options{Backend: fb})
+	m = settle(t, m, m.initCmd)
+	if m.mode != modeLogin || !strings.Contains(plain(m.View()), "expired or revoked") {
+		t.Errorf("mode %v, view:\n%s", m.mode, plain(m.View()))
 	}
 }
 
@@ -413,7 +426,9 @@ func TestRebuild(t *testing.T) {
 		}
 		return testEntries[:1], cache.Header{Expires: time.Now().Add(time.Hour)}, "cubbyhole unavailable", nil
 	}
-	m := newTest(t, Options{Entries: testEntries, Build: build})
+	fb := newFakeBackend(t)
+	fb.build = build
+	m := newTest(t, Options{Entries: testEntries, Backend: fb})
 	m = press(t, m, "ctrl+r")
 	if m.mode != modeList || len(m.results) != 2 {
 		t.Fatalf("after rebuild: mode %v rows %d", m.mode, len(m.results))
@@ -435,42 +450,95 @@ func TestRebuild(t *testing.T) {
 
 func TestCancelBuild(t *testing.T) {
 	cancelled := make(chan struct{})
-	build := func(ctx context.Context, _ func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+	fb := newFakeBackend(t)
+	fb.build = func(ctx context.Context, _ func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
 		<-ctx.Done()
 		close(cancelled)
 		return nil, cache.Header{}, "", ctx.Err()
 	}
-	m := newTest(t, Options{Build: build})
-	_, cmd := m.Update(keyMsg("esc"))
-	if msgs := runCmd(cmd); len(msgs) != 1 {
-		t.Errorf("esc with no index should quit, got %v", msgs)
-	} else if _, ok := msgs[0].(tea.QuitMsg); !ok {
-		t.Errorf("esc with no index should quit, got %T", msgs[0])
+	m := newTest(t, Options{Backend: fb})
+	next, cmd := m.Update(keyMsg("esc"))
+	m = next.(model)
+	if msgs := runCmd(cmd); len(msgs) != 0 {
+		t.Errorf("esc during indexing must not quit, got %v", msgs)
+	}
+	if m.mode != modeList || !strings.Contains(plain(m.View()), "Indexing cancelled") {
+		t.Errorf("mode %v view:\n%s", m.mode, plain(m.View()))
 	}
 	select {
 	case <-cancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("build context not cancelled")
 	}
+
+	// ctrl+c during indexing quits.
+	fb.build = func(ctx context.Context, _ func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+		<-ctx.Done()
+		return nil, cache.Header{}, "", ctx.Err()
+	}
+	m = newTest(t, Options{Backend: fb})
+	if !quits(m, "ctrl+c") {
+		t.Error("ctrl+c during indexing should quit")
+	}
 }
 
-func TestQuitKeys(t *testing.T) {
-	for _, k := range []string{"esc", "ctrl+c"} {
-		m := newTest(t, Options{Entries: testEntries})
-		_, cmd := m.Update(keyMsg(k))
-		msgs := runCmd(cmd)
-		if len(msgs) != 1 {
-			t.Errorf("%s: %v", k, msgs)
-			continue
+// quits reports whether key k makes the model quit.
+func quits(m model, k string) bool {
+	_, cmd := m.Update(keyMsg(k))
+	for _, msg := range runCmd(cmd) {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			return true
 		}
-		if _, ok := msgs[0].(tea.QuitMsg); !ok {
-			t.Errorf("%s: got %T", k, msgs[0])
-		}
+	}
+	return false
+}
+
+func TestSearchKeys(t *testing.T) {
+	m := newTest(t, Options{Entries: testEntries})
+	m = typeText(t, m, "stripe")
+
+	// esc clears the search and never quits.
+	if quits(m, "esc") {
+		t.Fatal("esc quit with a search typed")
+	}
+	m = press(t, m, "esc")
+	if m.input.Value() != "" || len(m.results) != 7 {
+		t.Errorf("esc: query %q, %d rows", m.input.Value(), len(m.results))
+	}
+	if quits(m, "esc") {
+		t.Error("esc quit on an empty search")
+	}
+
+	// ctrl+c clears a search first, then quits.
+	m = typeText(t, m, "db")
+	if quits(m, "ctrl+c") {
+		t.Fatal("ctrl+c quit with a search typed")
+	}
+	m = press(t, m, "ctrl+c")
+	if m.input.Value() != "" {
+		t.Errorf("ctrl+c did not clear: %q", m.input.Value())
+	}
+	if !quits(m, "ctrl+c") {
+		t.Error("ctrl+c on an empty search should quit")
+	}
+
+	// In the secret view, esc goes back and ctrl+c quits.
+	m = typeText(t, m, "stripe")
+	m = press(t, m, "enter")
+	if m.mode != modeDetail {
+		t.Fatal("enter did not open the secret")
+	}
+	if !quits(m, "ctrl+c") {
+		t.Error("ctrl+c in the secret view should quit")
+	}
+	m = press(t, m, "esc")
+	if m.mode != modeList || m.input.Value() != "stripe" {
+		t.Errorf("esc from the secret view: mode %v query %q", m.mode, m.input.Value())
 	}
 }
 
 func TestTinyTerminal(t *testing.T) {
-	m := newModel(Options{Entries: testEntries, Client: fakeVault(t, testSecrets)})
+	m := newModel(Options{Entries: testEntries, Backend: newFakeBackend(t)})
 	if m.View() != "" {
 		t.Error("view before size should be empty")
 	}
@@ -495,9 +563,9 @@ func TestHighlight(t *testing.T) {
 }
 
 func TestNamespaceInStatusLine(t *testing.T) {
-	c := fakeVault(t, testSecrets)
-	c.Namespace = "team-a"
-	m := newTest(t, Options{Entries: testEntries, Client: c})
+	fb := newFakeBackend(t)
+	fb.client.Namespace = "team-a"
+	m := newTest(t, Options{Entries: testEntries, Backend: fb})
 	if !strings.Contains(plain(m.View()), "ns team-a · 7/7") {
 		t.Errorf("namespace not shown:\n%s", plain(m.View()))
 	}

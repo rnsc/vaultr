@@ -26,6 +26,10 @@ var ErrNotFound = errors.New("not found")
 // ErrForbidden is returned for 403 responses.
 var ErrForbidden = errors.New("permission denied")
 
+// ErrTokenInvalid means the token is missing, expired or revoked: logging
+// in again is the fix. Errors wrapping it also wrap ErrForbidden.
+var ErrTokenInvalid = errors.New("token is missing, expired or invalid")
+
 // Client talks to a single Vault server with a single token.
 //
 // Namespace is where secrets are read. The token itself may live in a
@@ -102,11 +106,33 @@ func New(cfg Config) (*Client, error) {
 }
 
 // Token returns the token in use.
-func (c *Client) Token() string { return c.token }
+func (c *Client) Token() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token
+}
+
+// WithToken returns a client with the same server, TLS settings and
+// secrets namespace but another token, issued in namespace ns.
+func (c *Client) WithToken(token, ns string) *Client {
+	n := &Client{Addr: c.Addr, Namespace: c.Namespace, http: c.http}
+	n.SetToken(token, ns)
+	return n
+}
+
+// SetToken switches to a new token issued in namespace ns ("" = root), as
+// after a login.
+func (c *Client) SetToken(token, ns string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+	c.tokenNS, c.tokenNSOK, c.tokenNSBy = strings.Trim(ns, "/"), true, "login"
+}
 
 // Response is the generic Vault response envelope.
 type Response struct {
 	Data     json.RawMessage `json:"data"`
+	Auth     json.RawMessage `json:"auth"`
 	Errors   []string        `json:"errors"`
 	Warnings []string        `json:"warnings"`
 	// ServerTime is the Date header of the response, used as a clock that
@@ -119,6 +145,16 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 }
 
 func (c *Client) doIn(ctx context.Context, ns, method, path string, query url.Values, body any) (*Response, error) {
+	return c.send(ctx, true, ns, method, path, query, body)
+}
+
+// Unauthenticated sends a request without a token (login endpoints) in
+// namespace ns.
+func (c *Client) Unauthenticated(ctx context.Context, ns, method, path string, query url.Values, body any) (*Response, error) {
+	return c.send(ctx, false, strings.Trim(ns, "/"), method, path, query, body)
+}
+
+func (c *Client) send(ctx context.Context, withToken bool, ns, method, path string, query url.Values, body any) (*Response, error) {
 	u := c.Addr + "/v1/" + escapePath(strings.TrimLeft(path, "/"))
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -135,7 +171,9 @@ func (c *Client) doIn(ctx context.Context, ns, method, path string, query url.Va
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Vault-Token", c.token)
+	if withToken {
+		req.Header.Set("X-Vault-Token", c.Token())
+	}
 	req.Header.Set("X-Vault-Request", "true")
 	if ns != "" {
 		req.Header.Set("X-Vault-Namespace", ns)
@@ -345,6 +383,9 @@ type lookupData struct {
 func (c *Client) lookupIn(ctx context.Context, ns string) (TokenInfo, *string, error) {
 	resp, err := c.doIn(ctx, ns, http.MethodGet, "auth/token/lookup-self", nil, nil)
 	if err != nil {
+		if errors.Is(err, ErrForbidden) {
+			return TokenInfo{}, nil, fmt.Errorf("token lookup: %w (%w)", ErrTokenInvalid, err)
+		}
 		return TokenInfo{}, nil, fmt.Errorf("token lookup: %w", err)
 	}
 	var d lookupData
@@ -423,6 +464,14 @@ func (c *Client) TokenNamespace(ctx context.Context) (string, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return ti.Namespace, c.tokenNSBy, nil
+}
+
+// KnownTokenNamespace returns the token namespace if already known,
+// without contacting the server.
+func (c *Client) KnownTokenNamespace() (ns, by string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokenNS, c.tokenNSBy, c.tokenNSOK
 }
 
 // HintTokenNamespace records a previously detected token namespace (e.g.

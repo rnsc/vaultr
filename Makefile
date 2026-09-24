@@ -2,7 +2,7 @@ VAULT_VERSION ?= latest
 export VAULT_DEV_PORT ?= 8200
 VAULT_ENV = VAULT_ADDR=http://127.0.0.1:$(VAULT_DEV_PORT) VAULT_TOKEN=root
 
-.PHONY: build test lint integration dev-vault stop-vault
+.PHONY: build test lint integration dev-vault stop-vault demo
 
 build:
 	go build -o vaultr .
@@ -29,3 +29,7 @@ dev-vault:
 
 stop-vault:
 	scripts/vault-dev.sh stop
+
+# Records demo/*.gif (needs vhs, ttyd, ffmpeg); CI does this on PRs.
+demo:
+	scripts/demo.sh

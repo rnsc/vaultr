@@ -65,7 +65,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 
 func TestNewAppDefaults(t *testing.T) {
 	setEnv(t, nil)
-	a, err := newApp()
+	a, err := newApp(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestNewAppSettings(t *testing.T) {
 		"VAULTR_PATHS_ONLY": "true",
 		"VAULTR_MOUNTS":     " secret/ , /kv-team ,,",
 	})
-	a, err := newApp()
+	a, err := newApp(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestNewAppSettings(t *testing.T) {
 	}
 
 	setEnv(t, map[string]string{"VAULTR_MAX_AGE": "12h"})
-	if a, _ := newApp(); a.maxAge != cache.MaxAge {
+	if a, _ := newApp(true); a.maxAge != cache.MaxAge {
 		t.Errorf("max age not capped: %s", a.maxAge)
 	}
 }
@@ -108,7 +108,7 @@ func TestNewAppInvalid(t *testing.T) {
 		"VAULT_TOKEN":       "",
 	} {
 		setEnv(t, map[string]string{k: v})
-		if _, err := newApp(); err == nil {
+		if _, err := newApp(true); err == nil {
 			t.Errorf("%s=%q accepted", k, v)
 		}
 	}
@@ -153,7 +153,7 @@ func TestConfigCommand(t *testing.T) {
 	}
 	_ = os.WriteFile(p, []byte("namespace = \"team-a\"\n"), 0o600)
 	setEnv(t, map[string]string{"VAULTR_CONFIG": p})
-	a, err := newApp()
+	a, err := newApp(true)
 	if err != nil {
 		t.Fatal(err)
 	}

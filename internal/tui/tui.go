@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -10,30 +11,49 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/rnsc/vaultr/internal/auth"
 	"github.com/rnsc/vaultr/internal/cache"
+	"github.com/rnsc/vaultr/internal/config"
 	"github.com/rnsc/vaultr/internal/index"
 	"github.com/rnsc/vaultr/internal/search"
 	"github.com/rnsc/vaultr/internal/vault"
 )
 
-// BuildFunc rebuilds and saves the index.
-type BuildFunc func(ctx context.Context, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error)
+// Backend is what the TUI needs from the application.
+type Backend interface {
+	Client() *vault.Client
+	Settings() *config.Settings
+	// LoadCache returns the cached index; errors wrapping cache.ErrStale
+	// mean it must be rebuilt.
+	LoadCache(ctx context.Context) ([]index.Entry, cache.Header, error)
+	// Build crawls Vault and saves the index. The string is a warning.
+	Build(ctx context.Context, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error)
+	// Login switches to a new token; it returns a summary and a warning.
+	Login(ctx context.Context, r auth.Request) (string, string, error)
+	// Reload re-reads the config file, keeping the current token.
+	Reload() error
+}
 
 // Options for Run.
 type Options struct {
-	Client    *vault.Client
-	Entries   []index.Entry // nil means build first
-	Header    cache.Header
-	Build     BuildFunc
-	Query     string
-	ClipClear time.Duration
+	Backend Backend
+	Entries []index.Entry // nil means build first
+	Header  cache.Header
+	Query   string
+	// Login, when set, opens the login screen first with this reason.
+	Login string
 }
+
+// inputCursorMode is the text cursor style; tests make it static so no
+// blink timers are pending.
+var inputCursorMode = cursor.CursorBlink
 
 // Clipboard access, swappable in tests.
 var (
@@ -73,6 +93,8 @@ const (
 	modeList mode = iota
 	modeDetail
 	modeBuilding
+	modeLogin
+	modeConfig
 )
 
 type model struct {
@@ -93,11 +115,18 @@ type model struct {
 	progressCh chan tea.Msg
 	cancel     context.CancelFunc
 
-	detail   detailState
-	initCmd  tea.Cmd
-	fatal    error
-	flash    string
-	flashErr bool
+	detail detailState
+	login  loginState
+	cfg    configState
+	banner string // persistent problem shown above the status line
+	// notice is a message (from a login or config save) shown together
+	// with the result of the reindex that follows it.
+	notice    string
+	noticeErr bool
+	initCmd   tea.Cmd
+	fatal     error
+	flash     string
+	flashErr  bool
 }
 
 type detailState struct {
@@ -138,14 +167,18 @@ func newModel(opt Options) model {
 	ti.PromptStyle = sPointer
 	ti.Placeholder = "search paths and keys (k:key p:path)"
 	ti.SetValue(opt.Query)
+	ti.Cursor.SetMode(inputCursorMode)
 	ti.Focus()
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = sPointer
 	m := model{opt: opt, input: ti, spin: sp, header: opt.Header}
-	if opt.Entries != nil {
+	switch {
+	case opt.Login != "":
+		m.initCmd = m.openLogin(opt.Login)
+	case opt.Entries != nil:
 		m.setEntries(opt.Entries)
-	} else {
+	default:
 		m.initCmd = m.startBuild()
 	}
 	return m
@@ -168,14 +201,17 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(textinput.Blink, m.initCmd)
 }
 
+func (m *model) backend() Backend { return m.opt.Backend }
+
 func (m *model) startBuild() tea.Cmd {
 	m.mode = modeBuilding
+	m.banner = ""
 	m.progress = index.Progress{}
 	ch := make(chan tea.Msg, 16)
 	m.progressCh = ch
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	build := m.opt.Build
+	build := m.backend().Build
 	go func() {
 		entries, h, warn, err := build(ctx, func(p index.Progress) {
 			select {
@@ -211,21 +247,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case builtMsg:
 		m.cancel = nil
 		if msg.err != nil {
-			if m.ix == nil {
-				m.fatal = fmt.Errorf("building index: %w", msg.err)
-				return m, tea.Quit
+			if errors.Is(msg.err, vault.ErrTokenInvalid) {
+				return m, m.openLogin("Your token is missing, expired or revoked.")
 			}
 			m.mode = modeList
-			return m, m.setFlash("rebuild failed: "+msg.err.Error(), true)
+			if errors.Is(msg.err, context.Canceled) {
+				return m, nil
+			}
+			if m.ix == nil {
+				m.banner = "Indexing failed: " + msg.err.Error()
+				if m.notice != "" {
+					m.banner = m.notice + ". " + m.banner
+					m.notice = ""
+				}
+				return m, nil
+			}
+			m.noticeErr = true
+			return m, m.flashWithNotice("rebuild failed: "+msg.err.Error(), true)
 		}
 		m.header = msg.header
 		m.setEntries(msg.entries)
 		m.mode = modeList
-		text := fmt.Sprintf("indexed %d secrets", len(msg.entries))
+		text, isErr := fmt.Sprintf("indexed %d secrets", len(msg.entries)), false
 		if msg.warning != "" {
-			return m, m.setFlash(text+"; "+msg.warning, true)
+			text, isErr = text+"; "+msg.warning, true
 		}
-		return m, m.setFlash(text, false)
+		return m, m.flashWithNotice(text, isErr)
 	case spinner.TickMsg:
 		if m.mode != modeBuilding {
 			return m, nil
@@ -265,8 +312,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = ""
 		}
 		return m, nil
+	case loginURLMsg:
+		m.login.url = string(msg)
+		return m, waitFor(m.login.ch)
+	case loginDoneMsg:
+		return m.loginDone(msg)
+	case cacheMsg:
+		return m.cacheLoaded(msg)
 	case tea.KeyMsg:
 		switch m.mode {
+		case modeLogin:
+			return m.updateLogin(msg)
+		case modeConfig:
+			return m.updateConfig(msg)
 		case modeBuilding:
 			return m.updateBuilding(msg)
 		case modeDetail:
@@ -280,22 +338,92 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateBuilding(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "esc":
+	case "ctrl+c":
 		if m.cancel != nil {
 			m.cancel()
 		}
-		if m.ix == nil {
-			return m, tea.Quit
+		return m, tea.Quit
+	case "esc":
+		if m.cancel != nil {
+			m.cancel()
 		}
 		m.mode = modeList
+		if m.ix == nil {
+			m.banner = "Indexing cancelled."
+		}
 	}
 	return m, nil
+}
+
+// reindex loads the cache for the current settings and token, or builds
+// the index when there is none.
+func (m *model) reindex() tea.Cmd {
+	if m.backend().Client().Token() == "" {
+		return m.openLogin("No Vault token found.")
+	}
+	b := m.backend()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		e, h, err := b.LoadCache(ctx)
+		return cacheMsg{entries: e, header: h, err: err}
+	}
+}
+
+func (m model) cacheLoaded(msg cacheMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		// Stale or unreadable: rebuild (which also detects a bad token).
+		return m, m.startBuild()
+	}
+	m.header = msg.header
+	m.banner = ""
+	m.setEntries(msg.entries)
+	m.mode = modeList
+	return m, m.flashWithNotice("", false)
+}
+
+// indexAge describes when the index was built, e.g. " (built 12m ago)".
+func (m model) indexAge() string {
+	if m.header.Created.IsZero() {
+		return ""
+	}
+	return " (built " + time.Since(m.header.Created).Round(time.Minute).String() + " ago)"
+}
+
+// flashWithNotice shows text preceded by any pending notice.
+func (m *model) flashWithNotice(text string, isErr bool) tea.Cmd {
+	if m.notice != "" {
+		if text != "" {
+			text = text + " · " + m.notice // the short part first, so it survives truncation
+		} else {
+			text = m.notice
+		}
+		isErr = isErr || m.noticeErr
+		m.notice, m.noticeErr = "", false
+	}
+	if text == "" {
+		return nil
+	}
+	return m.setFlash(text, isErr)
 }
 
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
-		return m, tea.Quit
+		// Clear the search first; only ctrl+c on an empty search quits.
+		if m.input.Value() != "" {
+			m.input.SetValue("")
+			m.refresh()
+			return m, nil
+		}
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
+	case "ctrl+l":
+		return m, m.openLogin("")
+	case "ctrl+e":
+		return m, m.openConfig()
 	case "up", "ctrl+p", "ctrl+k":
 		m.move(-1)
 		return m, nil
@@ -314,6 +442,10 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail = detailState{row: row, loading: true}
 			return m, m.fetch(row.Entry)
 		}
+		if m.ix != nil && m.input.Value() != "" {
+			// Nothing matches: maybe it was added after the index was built.
+			return m, m.startBuild()
+		}
 		return m, nil
 	case "ctrl+y":
 		if row, ok := m.selected(); ok {
@@ -329,6 +461,9 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+r":
+		if m.backend().Client().Token() == "" {
+			return m, m.openLogin("No Vault token found.")
+		}
 		return m, m.startBuild()
 	}
 	var cmd tea.Cmd
@@ -405,7 +540,7 @@ func (m model) listHeight() int {
 }
 
 func (m model) fetch(e *index.Entry) tea.Cmd {
-	c := m.opt.Client
+	c := m.opt.Backend.Client()
 	path := e.Path
 	mount := vault.Mount{Path: e.Mount, KVVersion: e.KV}
 	rel := e.Rel()
@@ -413,12 +548,12 @@ func (m model) fetch(e *index.Entry) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		data, err := c.ReadSecret(ctx, mount, rel)
-		return secretMsg{path: path, values: vault.Stringify(data), err: err}
+		return secretMsg{path: path, values: vault.Stringify(data), err: withLoginHint(err)}
 	}
 }
 
 func (m model) fetchAndCopy(row search.Row) tea.Cmd {
-	c := m.opt.Client
+	c := m.opt.Backend.Client()
 	mount := vault.Mount{Path: row.Entry.Mount, KVVersion: row.Entry.KV}
 	rel, key := row.Entry.Rel(), row.Key
 	return func() tea.Msg {
@@ -426,7 +561,7 @@ func (m model) fetchAndCopy(row search.Row) tea.Cmd {
 		defer cancel()
 		data, err := c.ReadSecret(ctx, mount, rel)
 		if err != nil {
-			return copyValueMsg{err: err}
+			return copyValueMsg{err: withLoginHint(err)}
 		}
 		v, ok := vault.Stringify(data)[key]
 		if !ok {
@@ -444,8 +579,8 @@ func (m *model) copy(label, value string) tea.Cmd {
 		termenv.NewOutput(os.Stderr).Copy(value)
 	}
 	cmds := []tea.Cmd{m.setFlash("copied "+label+" to clipboard", false)}
-	if native && m.opt.ClipClear > 0 && label != "path" {
-		cmds = append(cmds, tea.Tick(m.opt.ClipClear, func(time.Time) tea.Msg { return clipClearMsg{value} }))
+	if clear := m.backend().Settings().ClipClear; native && clear > 0 && label != "path" {
+		cmds = append(cmds, tea.Tick(clear, func(time.Time) tea.Msg { return clipClearMsg{value} }))
 	}
 	return tea.Batch(cmds...)
 }
@@ -464,6 +599,10 @@ func (m model) View() string {
 		return m.viewBuilding()
 	case modeDetail:
 		return m.viewDetail()
+	case modeLogin:
+		return m.viewLogin()
+	case modeConfig:
+		return m.viewConfig()
 	}
 	return m.viewList()
 }
@@ -471,12 +610,12 @@ func (m model) View() string {
 func (m model) viewBuilding() string {
 	p := m.progress
 	var b strings.Builder
-	b.WriteString(sTitle.Render("vaultr") + sSubtle.Render("  "+m.opt.Client.Addr) + "\n\n")
+	b.WriteString(sTitle.Render("vaultr") + sSubtle.Render("  "+m.opt.Backend.Client().Addr) + "\n\n")
 	fmt.Fprintf(&b, " %s indexing: %d secrets, %d folders", m.spin.View(), p.Secrets, p.Lists)
 	if p.Denied > 0 {
 		b.WriteString(sWarn.Render(fmt.Sprintf(", %d denied", p.Denied)))
 	}
-	b.WriteString("\n\n" + sSubtle.Render(" esc to cancel"))
+	b.WriteString("\n\n" + sSubtle.Render(" esc cancel · ^c quit"))
 	return b.String()
 }
 
@@ -484,6 +623,12 @@ func (m model) viewList() string {
 	var b strings.Builder
 	b.WriteString(m.input.View() + "\n")
 	h := m.listHeight()
+	if m.banner != "" {
+		for _, l := range strings.Split(wordWrap(m.banner+" Press ^e to edit the config, ^l to log in, ^r to retry.", m.width-2), "\n") {
+			b.WriteString(" " + sWarn.Render(l) + "\n")
+			h--
+		}
+	}
 	terms := highlightTerms(m.input.Value())
 	end := min(m.offset+h, len(m.results))
 	lines := 0
@@ -498,11 +643,20 @@ func (m model) viewList() string {
 		b.WriteString(line + "\n")
 		lines++
 	}
+	if lines == 0 && m.ix != nil && m.input.Value() != "" && h > 1 {
+		hint := wordWrap("No match. Added it recently? Press enter or ^r to refresh the index"+m.indexAge()+".", m.width-2)
+		for _, l := range append([]string{""}, strings.Split(hint, "\n")...) {
+			if lines < h {
+				b.WriteString(" " + sSubtle.Render(l) + "\n")
+				lines++
+			}
+		}
+	}
 	for ; lines < h; lines++ {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r reindex · esc quit", m.width)))
+	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^l login · ^e config · esc clear · ^c quit", m.width)))
 	return b.String()
 }
 
@@ -519,7 +673,7 @@ func (m model) statusLine() string {
 		total = len(m.ix.Rows)
 	}
 	s := fmt.Sprintf("%d/%d", len(m.results), total)
-	if ns := m.opt.Client.Namespace; ns != "" {
+	if ns := m.opt.Backend.Client().Namespace; ns != "" {
 		s = "ns " + ns + " · " + s
 	}
 	if !m.header.Expires.IsZero() {
@@ -659,4 +813,33 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// withLoginHint adds a hint to permission errors, which usually mean the
+// token expired during the session.
+func withLoginHint(err error) error {
+	if err != nil && errors.Is(err, vault.ErrForbidden) {
+		return fmt.Errorf("%w (token expired? ^l to log in)", err)
+	}
+	return err
+}
+
+// wordWrap breaks s into lines of at most width runes at spaces.
+func wordWrap(s string, width int) string {
+	if width < 10 {
+		return s
+	}
+	var out, line strings.Builder
+	for _, w := range strings.Fields(s) {
+		if line.Len() > 0 && lipgloss.Width(line.String())+1+lipgloss.Width(w) > width {
+			out.WriteString(line.String() + "\n")
+			line.Reset()
+		}
+		if line.Len() > 0 {
+			line.WriteString(" ")
+		}
+		line.WriteString(w)
+	}
+	out.WriteString(line.String())
+	return out.String()
 }

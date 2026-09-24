@@ -11,6 +11,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/termenv v0.16.0
+	golang.org/x/term v0.33.0
 )
 
 require (

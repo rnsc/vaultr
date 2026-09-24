@@ -4,6 +4,7 @@
 #   scripts/vault-dev.sh start [VERSION]   # x.y.z, "latest" (default) or openbao-x.y.z
 #   scripts/vault-dev.sh stop
 #   scripts/vault-dev.sh env               # print export lines
+#   scripts/vault-dev.sh bin               # path of the running server's binary
 #
 # Vault comes from releases.hashicorp.com and OpenBao (which, unlike Vault
 # CE, supports namespaces) from its GitHub releases. Binaries are cached in
@@ -76,6 +77,7 @@ start() {
   "$bin" server -dev -dev-root-token-id="$token" -dev-listen-address="127.0.0.1:$port" \
     >"$state/server-$port.log" 2>&1 &
   echo $! >"$state/server-$port.pid"
+  echo "$bin" >"$state/server-$port.bin"
   for _ in $(seq 1 100); do
     if curl -fsS "$addr/v1/sys/health" >/dev/null 2>&1; then
       echo "$("$bin" version | awk '{print $1, $2}') listening on $addr (token: $token, log: $state/server-$port.log)" >&2
@@ -100,5 +102,6 @@ case "${1:-}" in
   start) start "${2:-latest}" ;;
   stop) stop ;;
   env) echo "export VAULT_ADDR=$addr VAULT_TOKEN=$token" ;;
+  bin) cat "$state/server-$port.bin" ;;
   *) sed -n '2,10p' "$0" >&2; exit 2 ;;
 esac
