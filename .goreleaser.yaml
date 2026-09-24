@@ -45,6 +45,41 @@ checksum:
 # to quarantined downloads (browsers); scripts/install.sh, gh and curl
 # don't set the quarantine flag.
 
+# Homebrew: `brew install rnsc/tap/vaultr`. Each release commits the cask
+# to rnsc/homebrew-tap, pushing over SSH with a deploy key that can write
+# to that repository only (secret HOMEBREW_TAP_SSH_KEY).
+homebrew_casks:
+  - name: vaultr
+    ids: [vaultr]
+    binaries: [vaultr]
+    homepage: https://github.com/rnsc/vaultr
+    description: Fast search over HashiCorp Vault KV paths and key names
+    directory: Casks
+    completions:
+      bash: completions/vaultr.bash
+      zsh: completions/vaultr.zsh
+      fish: completions/vaultr.fish
+    # Homebrew quarantines cask downloads, and Gatekeeper refuses a
+    # quarantined binary that isn't notarized (see above).
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/vaultr"]
+          end
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "vaultr {{ .Tag }}"
+    skip_upload: auto # not for prereleases
+    repository:
+      owner: rnsc
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:rnsc/homebrew-tap.git
+        private_key: '{{ index .Env "HOMEBREW_TAP_SSH_KEY" }}' # empty in CI snapshots
+
 changelog:
   use: github
   sort: asc

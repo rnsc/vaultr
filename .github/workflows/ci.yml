@@ -166,6 +166,13 @@ jobs:
         run: |
           ./dist/vaultr_linux_amd64_v1/vaultr version
           ./dist/vaultr_linux_amd64_v1/vaultr help | grep -q Usage
+      - name: Homebrew cask is generated and valid Ruby
+        run: |
+          cask=dist/homebrew/Casks/vaultr.rb
+          ruby -c "$cask"
+          for want in 'binary "vaultr"' bash_completion zsh_completion fish_completion 'com.apple.quarantine'; do
+            grep -q "$want" "$cask" || { echo "::error::$cask lacks $want"; cat "$cask"; exit 1; }
+          done
       - name: Install script (checksum + install from the built archives)
         run: |
           scripts/install.sh --from dist --dir "$RUNNER_TEMP/bin"

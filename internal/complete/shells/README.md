@@ -23,6 +23,17 @@ vaultr __complete WORD... CURRENT
 - It is fast: it reads the local index when one is valid, and otherwise
   lists only the folder being completed. Don't cache its output.
 
+## How scripts get loaded
+
+A script must work however the shell loads it:
+
+- printed by `vaultr completion <name>` and evaluated or sourced at startup
+  (what `vaultr completion install` sets up for bash and zsh);
+- installed as a file in the shell's completion directory. Release archives
+  ship the scripts in `completions/`, and Homebrew installs them from there.
+  zsh then autoloads the file as the body of `_vaultr`, which is why
+  `zsh.zsh` checks how it was loaded.
+
 ## Adding a shell
 
 1. Add `shells/<name>.<ext>` here. It registers a completion function for the
@@ -41,7 +52,9 @@ vaultr __complete WORD... CURRENT
    with `apt-get`, add it to the "Install fish and zsh" step in
    `.github/workflows/ci.yml` and add an end-to-end test next to the bash and
    fish ones in `integration/completion_test.go`.
+4. If Homebrew casks support your shell, add it under `completions:` in the
+   `homebrew_casks` section of [`.goreleaser.yaml`](../../../.goreleaser.yaml).
 
-That's all: `vaultr completion <name>`, `vaultr completion install`,
-detecting the shell from `$SHELL`, and the completion files in release
-archives all come from the registry.
+Everything else comes from the registry: `vaultr completion <name>`,
+`vaultr completion install`, detecting the shell from `$SHELL`, and the
+completion files in release archives.

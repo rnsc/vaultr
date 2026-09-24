@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,6 +182,38 @@ func TestZshCompletionScriptParses(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "registered" {
 		t.Errorf("zsh: %v\n%s", err, out)
+	}
+}
+
+// Homebrew installs the zsh script as _vaultr on $fpath, where zsh
+// autoloads it instead of running it with eval. Complete in a real
+// interactive zsh (zpty) that way.
+func TestZshCompletionAutoloaded(t *testing.T) {
+	t.Parallel()
+	vaultrOnPath(t)
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+	c := newCLI(t, rootChild(t, time.Hour))
+	c.ok("index")
+	fpath := t.TempDir()
+	script := c.ok("completion", "zsh").stdout
+	if err := os.WriteFile(filepath.Join(fpath, "_vaultr"), []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "zsh", "-f", "-c", `
+zmodload zsh/zpty
+zpty z zsh -f -i
+zpty -w z "fpath=($1 \$fpath); autoload -Uz compinit; compinit -u"
+zpty -w -n z "vaultr get $2"$'\t'
+zpty -r z out "*$3*" && print completed`,
+		"zsh", fpath, fx.KV2+"pr", fx.KV2+"prod/")
+	cmd.Env = append(shellEnv(c), "HOME="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "completed") {
+		t.Errorf("zsh did not complete %q to %q: %v\n%s", fx.KV2+"pr", fx.KV2+"prod/", err, out)
 	}
 }
 

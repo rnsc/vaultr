@@ -15,6 +15,15 @@ when you ask for them.
 
 ## Install
 
+On macOS (Apple silicon) or Linux, with [Homebrew](https://brew.sh):
+
+```sh
+brew install rnsc/tap/vaultr
+```
+
+`brew upgrade vaultr` picks up new releases. Homebrew also installs the
+bash, zsh and fish completion scripts (see [Tab completion](#tab-completion)).
+
 Prebuilt binaries are published on the
 [releases page](https://github.com/rnsc/vaultr/releases) for macOS (Apple
 silicon), Linux amd64/arm64 and Windows amd64.
@@ -65,6 +74,11 @@ vaultr purge                    # delete cache and its key
 ```
 
 ### Tab completion
+
+Installed with Homebrew, completion works in every shell that loads
+Homebrew's completions (fish does by default; for bash and zsh see
+[Homebrew's shell completion guide](https://docs.brew.sh/Shell-Completion)).
+Otherwise:
 
 ```sh
 vaultr completion install   # detects your shell from $SHELL (bash, zsh, fish)

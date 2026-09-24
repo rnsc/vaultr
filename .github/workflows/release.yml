@@ -66,6 +66,16 @@ jobs:
           echo "create=true" >> "$GITHUB_OUTPUT"
           if [ -z "$tag" ]; then echo "No release for this commit." >> "$GITHUB_STEP_SUMMARY"; fi
 
+      - name: Check the Homebrew tap key
+        if: steps.version.outputs.tag != ''
+        env:
+          HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_SSH_KEY" ]; then
+            echo "::error::Secret HOMEBREW_TAP_SSH_KEY is missing: add the private half of the rnsc/homebrew-tap deploy key."
+            exit 1
+          fi
+
       - name: Tag
         if: steps.version.outputs.tag != '' && steps.version.outputs.create == 'true'
         env:
@@ -85,6 +95,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the cask to rnsc/homebrew-tap (a deploy key for that repo).
+          HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
 
       # Build provenance (verify with `gh attestation verify`). GitHub only
       # offers this for public repositories on the free plan.
