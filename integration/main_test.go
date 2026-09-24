@@ -29,6 +29,7 @@ import (
 )
 
 var (
+	nsx     *testvault.Namespaces // nil when the server has no namespaces
 	addr    string
 	root    *vault.Client
 	fx      *testvault.Fixture
@@ -68,6 +69,17 @@ func run(m *testing.M) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "provisioning:", err)
 		return 1
+	}
+
+	nsx, err = testvault.ProvisionNamespaces(ctx, &testvault.Admin{Addr: addr, Token: tok}, fx.Prefix)
+	switch {
+	case errors.Is(err, testvault.ErrNoNamespaces):
+		fmt.Fprintln(os.Stderr, "server has no namespace support: namespace tests will be skipped")
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "provisioning namespaces:", err)
+		return 1
+	default:
+		defer nsx.Teardown(context.Background())
 	}
 
 	dir, err := os.MkdirTemp("", "vaultr-it-")

@@ -22,12 +22,24 @@ import (
 // depend on the vaultr client under test (a path-encoding bug there would
 // otherwise be mirrored on both the write and the read side).
 type Admin struct {
-	Addr  string
-	Token string
-	HTTP  *http.Client
+	Addr      string
+	Token     string
+	Namespace string
+	HTTP      *http.Client
+}
+
+// In returns a copy of a scoped to namespace ns.
+func (a *Admin) In(ns string) *Admin {
+	c := *a
+	c.Namespace = ns
+	return &c
 }
 
 func (a *Admin) do(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
+	return a.doQuery(ctx, method, path, "", body)
+}
+
+func (a *Admin) doQuery(ctx context.Context, method, path, query string, body any) (json.RawMessage, error) {
 	segs := strings.Split(strings.Trim(path, "/"), "/")
 	for i, s := range segs {
 		segs[i] = url.PathEscape(s)
@@ -40,11 +52,14 @@ func (a *Admin) do(ctx context.Context, method, path string, body any) (json.Raw
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.Addr, "/")+"/v1/"+strings.Join(segs, "/"), rdr)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.Addr, "/")+"/v1/"+strings.Join(segs, "/")+query, rdr)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-Vault-Token", a.Token)
+	if a.Namespace != "" {
+		req.Header.Set("X-Vault-Namespace", a.Namespace)
+	}
 	hc := a.HTTP
 	if hc == nil {
 		hc = http.DefaultClient
@@ -324,5 +339,98 @@ func (f *Fixture) Teardown(ctx context.Context) {
 	}
 	for _, p := range []string{f.Reader, f.ListOnly, f.NoCubby} {
 		_ = f.admin.delete(ctx, "sys/policies/acl/"+p)
+	}
+}
+
+// Namespaces is a small tree in two nested namespaces, for servers that
+// support them (Vault Enterprise, OpenBao).
+type Namespaces struct {
+	Parent, Child string // e.g. "it1234-ns", "it1234-ns/child"
+	// Secrets per namespace, in a KV v2 mount named "secret/".
+	Secrets map[string][]Secret
+	admin   *Admin
+}
+
+// ErrNoNamespaces means the server does not support namespaces.
+var ErrNoNamespaces = fmt.Errorf("server does not support namespaces")
+
+// ProvisionNamespaces creates <prefix>-ns and <prefix>-ns/child, each with
+// a KV v2 mount at secret/, a few secrets and a "reader" policy.
+func ProvisionNamespaces(ctx context.Context, admin *Admin, prefix string) (*Namespaces, error) {
+	n := &Namespaces{Parent: prefix + "-ns", Child: prefix + "-ns/child", admin: admin, Secrets: map[string][]Secret{}}
+	if _, err := admin.write(ctx, "sys/namespaces/"+n.Parent, map[string]any{}); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "unsupported path") {
+			return nil, ErrNoNamespaces
+		}
+		return nil, err
+	}
+	if _, err := admin.In(n.Parent).write(ctx, "sys/namespaces/child", map[string]any{}); err != nil {
+		return nil, err
+	}
+	n.Secrets[n.Parent] = []Secret{
+		{Mount: "secret/", Path: "team/app/db", Data: map[string]any{"password": "ns-parent-pass", "ns_only_key": "p"}},
+		{Mount: "secret/", Path: "team/app/api", Data: map[string]any{"api_key": "ns-parent-api"}},
+	}
+	n.Secrets[n.Child] = []Secret{
+		{Mount: "secret/", Path: "nested/thing", Data: map[string]any{"child_key": "ns-child-value"}},
+	}
+	for ns, secrets := range n.Secrets {
+		a := admin.In(ns)
+		if _, err := a.write(ctx, "sys/mounts/secret", map[string]any{"type": "kv", "options": map[string]string{"version": "2"}}); err != nil {
+			return nil, fmt.Errorf("mount in %s: %w", ns, err)
+		}
+		if _, err := a.write(ctx, "sys/policies/acl/reader", map[string]string{
+			"policy": `path "secret/*" { capabilities = ["read", "list"] }`,
+		}); err != nil {
+			return nil, fmt.Errorf("policy in %s: %w", ns, err)
+		}
+		f := &Fixture{admin: a, KV1: "-"}
+		for _, sec := range secrets {
+			if err := f.write(ctx, sec); err != nil {
+				return nil, fmt.Errorf("namespace %s: %w", ns, err)
+			}
+		}
+	}
+	return n, nil
+}
+
+// Token creates a token inside namespace ns with the given policies.
+func (n *Namespaces) Token(ctx context.Context, ns string, o TokenOptions) (string, error) {
+	f := &Fixture{admin: n.admin.In(ns)}
+	return f.Token(ctx, o)
+}
+
+// Teardown deletes both namespaces, child first. Namespace deletion is
+// asynchronous, so it waits for each to disappear.
+func (n *Namespaces) Teardown(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	parent := n.admin.In(n.Parent)
+	_ = parent.delete(ctx, "sys/namespaces/child")
+	waitGone(ctx, parent, "child/")
+	_ = n.admin.delete(ctx, "sys/namespaces/"+n.Parent)
+	waitGone(ctx, n.admin, n.Parent+"/")
+}
+
+func waitGone(ctx context.Context, a *Admin, name string) {
+	for ctx.Err() == nil {
+		raw, err := a.doQuery(ctx, http.MethodGet, "sys/namespaces", "?list=true", nil)
+		if err != nil {
+			return // 404: no namespaces left
+		}
+		var d struct {
+			Data struct {
+				Keys []string `json:"keys"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(raw, &d)
+		found := false
+		for _, k := range d.Data.Keys {
+			found = found || k == name
+		}
+		if !found {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

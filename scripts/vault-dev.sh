@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Start or stop a throwaway Vault dev server for tests.
+# Start or stop a throwaway Vault (or OpenBao) dev server for tests.
 #
-#   scripts/vault-dev.sh start [VERSION]   # VERSION: x.y.z or "latest" (default)
+#   scripts/vault-dev.sh start [VERSION]   # x.y.z, "latest" (default) or openbao-x.y.z
 #   scripts/vault-dev.sh stop
 #   scripts/vault-dev.sh env               # print export lines
 #
-# The binary is downloaded from releases.hashicorp.com into .cache/vault/
-# unless a "vault" of the requested version is already on PATH.
+# Vault comes from releases.hashicorp.com and OpenBao (which, unlike Vault
+# CE, supports namespaces) from its GitHub releases. Binaries are cached in
+# .cache/vault/; a "vault" of the requested version already on PATH is used
+# as is.
 # Settings: VAULT_DEV_PORT (default 8200), VAULT_DEV_TOKEN (default "root").
 set -euo pipefail
 
@@ -19,6 +21,24 @@ addr="http://127.0.0.1:$port"
 latest() {
   curl -fsSL https://releases.hashicorp.com/vault/index.json |
     jq -r '.versions | keys[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+}
+
+install_openbao() {
+  local version="$1" os arch dir
+  os="$(uname -s)" # Linux / Darwin
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=x86_64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+  esac
+  dir="$state/openbao-$version"
+  if [[ ! -x "$dir/bao" ]]; then
+    echo "downloading openbao $version ($os/$arch)" >&2
+    mkdir -p "$dir"
+    curl -fsSL "https://github.com/openbao/openbao/releases/download/v${version}/bao_${version}_${os}_${arch}.tar.gz" |
+      tar xz -C "$dir" bao
+  fi
+  echo "$dir/bao"
 }
 
 install() {
@@ -44,7 +64,9 @@ install() {
 start() {
   local version="${1:-latest}" bin
   [[ "$version" == latest ]] && version="$(latest)"
-  if command -v vault >/dev/null && vault version | grep -q "v${version} "; then
+  if [[ "$version" == openbao-* ]]; then
+    bin="$(install_openbao "${version#openbao-}")"
+  elif command -v vault >/dev/null && vault version | grep -q "v${version} "; then
     bin="$(command -v vault)"
   else
     bin="$(install "$version")"
@@ -56,7 +78,7 @@ start() {
   echo $! >"$state/server-$port.pid"
   for _ in $(seq 1 100); do
     if curl -fsS "$addr/v1/sys/health" >/dev/null 2>&1; then
-      echo "vault $("$bin" version | awk '{print $2}') listening on $addr (token: $token, log: $state/server-$port.log)" >&2
+      echo "$("$bin" version | awk '{print $1, $2}') listening on $addr (token: $token, log: $state/server-$port.log)" >&2
       return 0
     fi
     sleep 0.2
