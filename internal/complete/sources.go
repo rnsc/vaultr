@@ -123,6 +123,12 @@ func (s *LiveSource) Keys(ctx context.Context, path string) ([]string, bool) {
 	return keysOf(seen), true
 }
 
+// Namespaces implements NamespaceSource.
+func (s *LiveSource) Namespaces(ctx context.Context) ([]string, bool) {
+	list, err := s.Client.ListNamespaces(ctx)
+	return list, err == nil
+}
+
 func keysOf(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

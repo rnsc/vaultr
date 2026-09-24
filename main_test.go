@@ -13,6 +13,36 @@ import (
 	"github.com/rnsc/vaultr/internal/cache"
 )
 
+func TestNamespaceFlag(t *testing.T) {
+	str := func(s string) *string { return &s }
+	for _, c := range []struct {
+		in   []string
+		ns   *string
+		rest []string
+	}{
+		{[]string{"find", "x"}, nil, []string{"find", "x"}},
+		{[]string{"--ns", "team-a", "find", "x"}, str("team-a"), []string{"find", "x"}},
+		{[]string{"find", "--namespace=team-a/child/", "x"}, str("team-a/child"), []string{"find", "x"}},
+		{[]string{"-ns", "/", "get", "p"}, str(""), []string{"get", "p"}},
+		{[]string{"-namespace=/"}, str(""), []string{}},
+		{[]string{"--ns", "a", "--ns", "b"}, str("b"), []string{}},
+		{[]string{"find", "--", "--ns", "x"}, nil, []string{"find", "--", "--ns", "x"}},
+		{[]string{"--nsx", "y"}, nil, []string{"--nsx", "y"}},
+	} {
+		ns, rest, err := namespaceFlag(c.in)
+		if err != nil {
+			t.Errorf("%q: %v", c.in, err)
+			continue
+		}
+		if (ns == nil) != (c.ns == nil) || (ns != nil && *ns != *c.ns) || !reflect.DeepEqual(rest, c.rest) {
+			t.Errorf("%q: got %v %q", c.in, ns, rest)
+		}
+	}
+	if _, _, err := namespaceFlag([]string{"find", "--ns"}); err == nil || !strings.Contains(err.Error(), "needs a namespace") {
+		t.Errorf("missing value: %v", err)
+	}
+}
+
 func TestParseInterspersed(t *testing.T) {
 	cases := []struct {
 		args  []string
@@ -65,7 +95,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 
 func TestNewAppDefaults(t *testing.T) {
 	setEnv(t, nil)
-	a, err := newApp(true)
+	a, err := newApp(true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +112,7 @@ func TestNewAppSettings(t *testing.T) {
 		"VAULTR_PATHS_ONLY": "true",
 		"VAULTR_MOUNTS":     " secret/ , /kv-team ,,",
 	})
-	a, err := newApp(true)
+	a, err := newApp(true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +124,7 @@ func TestNewAppSettings(t *testing.T) {
 	}
 
 	setEnv(t, map[string]string{"VAULTR_MAX_AGE": "12h"})
-	if a, _ := newApp(true); a.maxAge != cache.MaxAge {
+	if a, _ := newApp(true, nil); a.maxAge != cache.MaxAge {
 		t.Errorf("max age not capped: %s", a.maxAge)
 	}
 }
@@ -108,7 +138,7 @@ func TestNewAppInvalid(t *testing.T) {
 		"VAULT_TOKEN":       "",
 	} {
 		setEnv(t, map[string]string{k: v})
-		if _, err := newApp(true); err == nil {
+		if _, err := newApp(true, nil); err == nil {
 			t.Errorf("%s=%q accepted", k, v)
 		}
 	}
@@ -153,7 +183,7 @@ func TestConfigCommand(t *testing.T) {
 	}
 	_ = os.WriteFile(p, []byte("namespace = \"team-a\"\n"), 0o600)
 	setEnv(t, map[string]string{"VAULTR_CONFIG": p})
-	a, err := newApp(true)
+	a, err := newApp(true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
