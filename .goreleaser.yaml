@@ -38,22 +38,10 @@ archives:
 checksum:
   name_template: SHA256SUMS
 
-# Signs the macOS binary with a Developer ID certificate and notarizes it
-# with Apple, from Linux (no macOS runner needed). Skipped when the secrets
-# are not configured; the release job then flags the binary as unsigned.
-notarize:
-  macos:
-    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids: [vaultr]
-      sign:
-        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
-        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
-      notarize:
-        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
-        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
-        key: "{{ .Env.MACOS_NOTARY_KEY }}"
-        wait: true
-        timeout: 20m
+# No Apple notarization: Go's linker ad-hoc signs darwin/arm64 binaries,
+# which is all Apple silicon needs to run them. Gatekeeper only objects
+# to quarantined downloads (browsers); scripts/install.sh, gh and curl
+# don't set the quarantine flag.
 
 changelog:
   use: github

@@ -11,10 +11,27 @@ when you ask for them.
 
 ## Install
 
-Download a binary from the
-[releases page](https://github.com/rnsc/vaultr/releases): macOS (Apple
-silicon, signed and notarized), Linux amd64/arm64, Windows amd64. Then
-check it against `SHA256SUMS`.
+Prebuilt binaries are published on the
+[releases page](https://github.com/rnsc/vaultr/releases) for macOS (Apple
+silicon), Linux amd64/arm64 and Windows amd64.
+
+On macOS and Linux, the install script picks the right archive, checks it
+against `SHA256SUMS`, and installs it to `~/.local/bin`:
+
+```sh
+# while the repository is private (needs the GitHub CLI, logged in):
+gh api repos/rnsc/vaultr/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
+# once it is public:
+curl -fsSL https://raw.githubusercontent.com/rnsc/vaultr/main/scripts/install.sh | bash
+# or, from a clone:
+scripts/install.sh [--version v0.1.0] [--dir /usr/local/bin]
+```
+
+The macOS binary is ad-hoc signed but not notarized, so there's no Apple
+Developer account behind it. Installed with the script, `gh` or `curl`, it
+just runs. If you download it **with a browser**, macOS quarantines it and
+refuses to open it. Clear the flag once with
+`xattr -d com.apple.quarantine ./vaultr`.
 
 Or build from source:
 
@@ -79,6 +96,7 @@ config file, then the built-in default**.
 | Server address   | `VAULT_ADDR`, then `VAULT_URL`             | `address`     |
 | Token            | `VAULT_TOKEN`, then `~/.vault-token`       | never         |
 | Namespace        | `VAULT_NAMESPACE` (`/` forces the root one) | `namespace`   |
+| Token namespace  | `VAULTR_TOKEN_NAMESPACE`                   | `token_namespace` (auto-detected) |
 | CA certificate   | `VAULT_CACERT`                             | `ca_cert`     |
 | Client cert/key  | `VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY`    | `client_cert`, `client_key` |
 | Skip TLS verify  | `VAULT_SKIP_VERIFY`                        | no            |
@@ -125,9 +143,35 @@ names.
 ### Namespaces
 
 Namespaces (Vault Enterprise, OpenBao) work through `VAULT_NAMESPACE` or
-`namespace` in the config file. Each namespace gets its own cache file,
-and the cache key lives in the token's cubbyhole inside that namespace.
-vaultr searches only the configured namespace, not its child namespaces.
+`namespace` in the config file. vaultr searches only that namespace, not
+its child namespaces.
+
+A common enterprise setup is to log in at the root namespace and read
+secrets in a team namespace. That works with only the namespace
+configured:
+
+```toml
+# ~/.config/vaultr/config.toml
+address   = "https://vault.example.com"
+namespace = "team-a"
+```
+
+```sh
+VAULT_NAMESPACE= vault login -method=oidc   # token issued in the root namespace
+vaultr                                      # searches team-a
+```
+
+Secret calls go to `team-a`. Token calls (the lookup, and the cubbyhole
+that holds the cache key) go to the namespace the token was issued in,
+which vaultr detects: the server reports it, or vaultr checks whether the
+token is valid in the root namespace. That keeps the time bomb in place,
+so revoking or expiring your root-namespace login makes the cache
+unreadable. `vaultr status` shows both namespaces. If detection picks the
+wrong one, set `token_namespace` (`"/"` for root) or
+`VAULTR_TOKEN_NAMESPACE`.
+
+Each secrets namespace gets its own cache file. The TUI status line shows
+the active namespace.
 
 ## Cache security
 
@@ -207,6 +251,11 @@ VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./in
     stolen file copies, max age, key rotation and purge
   - the built `vaultr` binary end to end: every command, flag and setting,
     exit codes and error messages
+  - the TUI, driven through a real pseudo-terminal: search, reveal,
+    reindex, quit
+  - namespaces, on OpenBao: nested namespaces, and logging in at the root
+    namespace while reading secrets in a team namespace, both from the CLI
+    and the TUI
 
 CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes
 to `main`:
@@ -239,22 +288,3 @@ PR title and description:
 The first release is `v0.1.0`. You can also release by hand: push a
 `vX.Y.Z` tag, or run the **release** workflow from the Actions tab and pick
 the bump.
-
-### macOS signing and notarization
-
-GoReleaser signs and notarizes the macOS binary from Linux. This needs an
-[Apple Developer Program](https://developer.apple.com/programs/) membership
-and these repository secrets:
-
-| Secret                   | Value                                                          |
-|--------------------------|----------------------------------------------------------------|
-| `MACOS_SIGN_P12`         | base64 of your **Developer ID Application** certificate exported as `.p12` (`base64 -i cert.p12`) |
-| `MACOS_SIGN_PASSWORD`    | the `.p12` export password                                     |
-| `MACOS_NOTARY_ISSUER_ID` | App Store Connect API issuer ID                                |
-| `MACOS_NOTARY_KEY_ID`    | App Store Connect API key ID                                   |
-| `MACOS_NOTARY_KEY`       | base64 of the API key `.p8` file                               |
-
-Create the API key under App Store Connect, Users and Access,
-Integrations, with the Developer role. Until the secrets are set, releases
-still go out, but the macOS binary is unsigned and the release run shows a
-warning.
