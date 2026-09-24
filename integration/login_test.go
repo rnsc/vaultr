@@ -286,8 +286,8 @@ func TestTUIConfigEditorCreatesFile(t *testing.T) {
 	}
 	tm.send(" ")
 	m = tm.mark()
-	tm.send("\x13") // ctrl+s
-	tm.waitFor(m, "saved "+p)
+	tm.send("\x13")         // ctrl+s
+	tm.waitFor(m, "saved ") // the path is shortened on screen; the file is checked below
 	tm.send(keyCtrlC)
 	tm.waitExit()
 

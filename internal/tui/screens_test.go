@@ -185,7 +185,7 @@ func TestConfigEditorCreatesFile(t *testing.T) {
 	m = press(t, m, " ") // true -> false
 
 	m = press(t, m, "ctrl+s")
-	if m.mode != modeList || m.cfg.err != nil || !strings.Contains(m.flash, "saved "+fb.settings.Path) {
+	if m.mode != modeList || m.cfg.err != nil || !strings.Contains(m.flash, "saved "+displayPath(fb.settings.Path, 48)) {
 		t.Fatalf("save: mode %v err %v flash %q", m.mode, m.cfg.err, m.flash)
 	}
 	if fb.reloads != 1 {
@@ -304,5 +304,16 @@ func TestConfigEditorLongPath(t *testing.T) {
 	first := strings.SplitN(plain(m.View()), "\n", 2)[0]
 	if !strings.Contains(first, "(new file)") || !strings.HasSuffix(strings.TrimSpace(first), "config.toml") || lipgloss.Width(first) > 100 {
 		t.Errorf("title line %q", first)
+	}
+}
+
+func TestDisplayPath(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	if got := displayPath(home+"/.config/vaultr/config.toml", 48); got != "~/.config/vaultr/config.toml" {
+		t.Errorf("home path: %q", got)
+	}
+	long := "/var/folders/36/" + strings.Repeat("x", 80) + "/cfg/config.toml"
+	if got := displayPath(long, 48); len([]rune(got)) != 48 || !strings.HasSuffix(got, "/cfg/config.toml") || !strings.HasPrefix(got, "…") {
+		t.Errorf("long path: %q", got)
 	}
 }

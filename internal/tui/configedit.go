@@ -167,7 +167,7 @@ func (m model) saveConfig() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mode = modeList
-	m.notice = "saved " + m.cfg.path
+	m.notice = "saved " + displayPath(m.cfg.path, 48)
 	return m, m.reindex()
 }
 
@@ -277,4 +277,13 @@ func shortenLeft(s string, width int) string {
 		return s
 	}
 	return "…" + string(r[len(r)-width+1:])
+}
+
+// displayPath shows p with ~ for the home directory, shortened from the
+// left to at most width runes.
+func displayPath(p string, width int) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		p = "~" + p[len(home):]
+	}
+	return shortenLeft(p, width)
 }
