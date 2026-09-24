@@ -121,10 +121,54 @@ On top of that:
 ## Development
 
 ```sh
-go test ./...
-# Integration testing against a local dev server:
-vault server -dev -dev-root-token-id=root &
-export VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root
-vault kv put secret/prod/db username=app password=hunter2
-go run . find password
+make test          # unit tests, no Vault needed
+make lint          # gofmt + go vet
+make integration   # starts a throwaway Vault dev server, runs the integration suite, stops it
+make dev-vault     # dev server loaded with the fixture tree, for trying vaultr by hand
 ```
+
+`make integration` and `make dev-vault` download the Vault binary into
+`.cache/vault/` (Linux and macOS). Pick a version with
+`VAULT_VERSION=1.15.6` and a port with `VAULT_DEV_PORT=8300`. To run the
+suite against a server you already have, point it at a disposable one with
+a root token:
+
+```sh
+VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./integration
+```
+
+### What is tested
+
+- **Unit** (`go test ./...`): search ranking and filters; the Vault
+  client's URL encoding, error mapping and env parsing; the cache format
+  against a fake server (tampering, server-clock expiry, a key wiped from
+  the cubbyhole); the TUI model (filtering, scrolling, masked and revealed
+  values, copy, clipboard auto-clear, index builds, rebuilds and
+  cancellation); CLI argument and settings parsing.
+- **Integration** (`integration/`, build tag `integration`): each run
+  creates its own mounts and policies under a random prefix: a KV v2 tree
+  with about 115 secrets, a KV v1 mount, an empty mount and a transit mount
+  that must be ignored. It removes them afterwards. The tree includes
+  deep nesting, a secret sharing its name with a folder, names with
+  spaces, `#`, `?` and non-ASCII characters, non-string values, and
+  deleted, destroyed and multi-version secrets. The fixture is written
+  with its own HTTP client, so it doesn't depend on the code under test.
+  The suite covers:
+  - mount discovery
+  - crawling with root, restricted, list-only and no-cubbyhole tokens
+  - the cache time bomb against a real server: token expiry, revocation,
+    stolen file copies, max age, key rotation and purge
+  - the built `vaultr` binary end to end: every command, flag and setting,
+    exit codes and error messages
+
+CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes
+to `main`:
+
+- lint: gofmt, vet, staticcheck, `go mod tidy`, shellcheck
+- unit tests with the race detector
+- the integration suite against Vault 1.15, 1.20 and the latest release on
+  Linux, plus the latest release on macOS
+- cross-compilation for Linux, macOS and Windows
+
+`ci-ok` is a single job that sums up the others, to use as the required
+check for branch protection.
