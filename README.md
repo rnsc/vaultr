@@ -11,6 +11,13 @@ when you ask for them.
 
 ## Install
 
+Download a binary from the
+[releases page](https://github.com/rnsc/vaultr/releases): macOS (Apple
+silicon, signed and notarized), Linux amd64/arm64, Windows amd64. Then
+check it against `SHA256SUMS`.
+
+Or build from source:
+
 ```sh
 go install github.com/rnsc/vaultr@latest
 ```
@@ -62,26 +69,65 @@ Values copied to the system clipboard are cleared after 45s if still there.
 
 ## Configuration
 
-Connection settings use the standard Vault variables: `VAULT_ADDR`,
-`VAULT_TOKEN` (or `~/.vault-token`), `VAULT_NAMESPACE`, `VAULT_CACERT`,
-`VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY`, `VAULT_SKIP_VERIFY`.
+Each setting is resolved in this order: **environment variable, then the
+config file, then the built-in default**.
 
-| Variable            | Default        | Meaning                                                   |
-|---------------------|----------------|-----------------------------------------------------------|
-| `VAULTR_MOUNTS`     | discover       | Comma separated KV mounts to index, e.g. `secret,kv-team` |
-| `VAULTR_WORKERS`    | `32`           | Concurrent requests while indexing                        |
-| `VAULTR_MAX_AGE`    | `2h`           | Cache lifetime. Values above 2h are capped at 2h           |
-| `VAULTR_PATHS_ONLY` | `false`        | Index paths only. Faster, and needs no `read` permission, but you can't search key names |
-| `VAULTR_CLIP_CLEAR` | `45s`          | Clipboard auto-clear delay in the TUI (`0` disables)      |
-| `VAULTR_CACHE_DIR`  | user cache dir | Where the encrypted index lives                           |
+### Connection
+
+| Setting          | Environment                                | Config file   |
+|------------------|--------------------------------------------|---------------|
+| Server address   | `VAULT_ADDR`, then `VAULT_URL`             | `address`     |
+| Token            | `VAULT_TOKEN`, then `~/.vault-token`       | never         |
+| Namespace        | `VAULT_NAMESPACE` (`/` forces the root one) | `namespace`   |
+| CA certificate   | `VAULT_CACERT`                             | `ca_cert`     |
+| Client cert/key  | `VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY`    | `client_cert`, `client_key` |
+| Skip TLS verify  | `VAULT_SKIP_VERIFY`                        | no            |
+
+The token is never read from the config file. `vault login` writes
+`~/.vault-token`, and vaultr picks it up from there.
+
+### Config file
+
+The config file lives at `~/.config/vaultr/config.toml`, or
+`$XDG_CONFIG_HOME/vaultr/config.toml`, or `%AppData%\vaultr\config.toml`
+on Windows. Set `VAULTR_CONFIG` to use another path. `vaultr config init`
+writes a commented template, and `vaultr config` shows each effective
+setting and where it came from.
+
+```toml
+address   = "https://vault.example.com"
+namespace = "team-a"
+mounts    = ["secret", "kv-team"]
+```
+
+Misspelled keys are rejected, so a typo doesn't silently fall back to a
+default.
+
+### vaultr settings
+
+| Config key   | Environment         | Default        | Meaning                                                   |
+|--------------|---------------------|----------------|-----------------------------------------------------------|
+| `mounts`     | `VAULTR_MOUNTS`     | discover       | KV mounts to index (comma separated in the env var)       |
+| `workers`    | `VAULTR_WORKERS`    | `32`           | Concurrent requests while indexing                        |
+| `max_age`    | `VAULTR_MAX_AGE`    | `2h`           | Cache lifetime. Values above 2h are capped at 2h          |
+| `paths_only` | `VAULTR_PATHS_ONLY` | `false`        | Index paths only. Faster, and needs no `read` permission, but you can't search key names |
+| `clip_clear` | `VAULTR_CLIP_CLEAR` | `45s`          | Clipboard auto-clear delay in the TUI (`0` disables)      |
+| `cache_dir`  | `VAULTR_CACHE_DIR`  | user cache dir | Where the encrypted index lives                           |
 
 Mounts are discovered through `sys/internal/ui/mounts`, which any token can
 read (Vault filters the result by policy). If discovery fails, vaultr falls
-back to `sys/mounts`. Set `VAULTR_MOUNTS` to skip discovery.
+back to `sys/mounts`. Set `mounts` to skip discovery.
 
 Paths the token can't list or read are skipped and counted as "denied".
 Paths that can be listed but not read are still indexed, just without key
 names.
+
+### Namespaces
+
+Namespaces (Vault Enterprise, OpenBao) work through `VAULT_NAMESPACE` or
+`namespace` in the config file. Each namespace gets its own cache file,
+and the cache key lives in the token's cubbyhole inside that namespace.
+vaultr searches only the configured namespace, not its child namespaces.
 
 ## Cache security
 
@@ -125,6 +171,7 @@ make test          # unit tests, no Vault needed
 make lint          # gofmt + go vet
 make integration   # starts a throwaway Vault dev server, runs the integration suite, stops it
 make dev-vault     # dev server loaded with the fixture tree, for trying vaultr by hand
+VAULT_VERSION=openbao-2.5.5 make integration   # same suite on OpenBao, including namespaces
 ```
 
 `make integration` and `make dev-vault` download the Vault binary into
@@ -166,9 +213,48 @@ to `main`:
 
 - lint: gofmt, vet, staticcheck, `go mod tidy`, shellcheck
 - unit tests with the race detector
-- the integration suite against Vault 1.15, 1.20 and the latest release on
-  Linux, plus the latest release on macOS
-- cross-compilation for Linux, macOS and Windows
+- the integration suite against Vault 1.15, 1.21 and the latest release
+  and OpenBao on Linux, plus the latest Vault release on macOS. OpenBao
+  also runs the namespace tests, which skip on Vault CE because namespaces
+  are an Enterprise feature there.
+- a dry run of the release build, with the binaries attached to the run
 
 `ci-ok` is a single job that sums up the others, to use as the required
 check for branch protection.
+
+## Releases
+
+`.github/workflows/release.yml` publishes a GitHub release with binaries
+and `SHA256SUMS` whenever CI passes on `main` after a merge. The version
+bump comes from the merge commit message, which with squash merges is the
+PR title and description:
+
+| In the commit message                                   | Release            |
+|---------------------------------------------------------|--------------------|
+| nothing special                                         | patch, v0.1.**1**  |
+| `feat: ...`, or `[minor]`                               | minor, v0.**2**.0  |
+| `feat!: ...`, `BREAKING CHANGE`, or `[major]`           | major, v**1**.0.0  |
+| `[skip release]`                                        | none               |
+
+The first release is `v0.1.0`. You can also release by hand: push a
+`vX.Y.Z` tag, or run the **release** workflow from the Actions tab and pick
+the bump.
+
+### macOS signing and notarization
+
+GoReleaser signs and notarizes the macOS binary from Linux. This needs an
+[Apple Developer Program](https://developer.apple.com/programs/) membership
+and these repository secrets:
+
+| Secret                   | Value                                                          |
+|--------------------------|----------------------------------------------------------------|
+| `MACOS_SIGN_P12`         | base64 of your **Developer ID Application** certificate exported as `.p12` (`base64 -i cert.p12`) |
+| `MACOS_SIGN_PASSWORD`    | the `.p12` export password                                     |
+| `MACOS_NOTARY_ISSUER_ID` | App Store Connect API issuer ID                                |
+| `MACOS_NOTARY_KEY_ID`    | App Store Connect API key ID                                   |
+| `MACOS_NOTARY_KEY`       | base64 of the API key `.p8` file                               |
+
+Create the API key under App Store Connect, Users and Access,
+Integrations, with the Developer role. Until the secrets are set, releases
+still go out, but the macOS binary is unsigned and the release run shows a
+warning.

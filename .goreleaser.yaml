@@ -1,0 +1,69 @@
+version: 2
+
+project_name: vaultr
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: vaultr
+    main: .
+    binary: vaultr
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    targets:
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - windows_amd64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: vaultr
+    ids: [vaultr]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: SHA256SUMS
+
+# Signs the macOS binary with a Developer ID certificate and notarizes it
+# with Apple, from Linux (no macOS runner needed). Skipped when the secrets
+# are not configured; the release job then flags the binary as unsigned.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [vaultr]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge branch"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    Verify downloads with `sha256sum -c SHA256SUMS --ignore-missing`.

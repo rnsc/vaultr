@@ -58,14 +58,16 @@ jobs:
           go tool cover -func=coverage-unit.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
 
   integration:
-    name: integration (vault ${{ matrix.vault }}, ${{ matrix.os }})
+    name: integration (${{ matrix.vault }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        vault: ["1.15.6", "1.20.4", "latest"]
+        # Vault CE versions, plus OpenBao, which also runs the namespace
+        # tests (namespaces are Enterprise-only in Vault).
+        vault: ["1.15.6", "1.21.4", "latest", "openbao-2.5.5"]
         include:
           - os: macos-latest
             vault: latest
@@ -105,26 +107,39 @@ jobs:
         if: always()
         run: scripts/vault-dev.sh stop
 
+  # Dry run of the release build (all targets), with the binaries attached
+  # to the workflow run for manual testing.
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - linux/amd64
-          - linux/arm64
-          - darwin/amd64
-          - darwin/arm64
-          - windows/amd64
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build ${{ matrix.target }}
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
+      - name: Smoke test
         run: |
-          GOOS="${TARGET%/*}" GOARCH="${TARGET#*/}" CGO_ENABLED=0 go build -trimpath -o /dev/null .
-        env:
-          TARGET: ${{ matrix.target }}
+          ./dist/vaultr_linux_amd64_v1/vaultr version
+          ./dist/vaultr_linux_amd64_v1/vaultr help | grep -q Usage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaultr-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          retention-days: 7
 
   # Single required check for branch protection.
   ci-ok:
