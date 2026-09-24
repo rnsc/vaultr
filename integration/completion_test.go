@@ -203,14 +203,19 @@ func TestZshCompletionAutoloaded(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	// Type only once the prompt shows (the split 'RE''ADY' keeps the echoed
+	// command from matching): macOS drops keys typed before zsh's line
+	// editor starts.
 	cmd := exec.CommandContext(ctx, "zsh", "-f", "-c", `
 zmodload zsh/zpty
 zpty z zsh -f -i
-zpty -w z "fpath=($1 \$fpath); autoload -Uz compinit; compinit -u"
+zpty -w z "fpath=($1 \$fpath); autoload -Uz compinit; compinit -u; PS1='RE''ADY> '"
+zpty -r z out '*READY> *'
 zpty -w -n z "vaultr get $2"$'\t'
 zpty -r z out "*$3*" && print completed`,
 		"zsh", fpath, fx.KV2+"pr", fx.KV2+"prod/")
-	cmd.Env = append(shellEnv(c), "HOME="+t.TempDir())
+	// HOME stays the test's own (c.env): on macOS it also locates the cache.
+	cmd.Env = shellEnv(c)
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "completed") {
 		t.Errorf("zsh did not complete %q to %q: %v\n%s", fx.KV2+"pr", fx.KV2+"prod/", err, out)
