@@ -71,12 +71,17 @@ func (m *model) afterLogin() tea.Cmd {
 		case pendingBuild:
 			return tea.Batch(append(cmds, m.startBuild())...)
 		}
-		if m.ix != nil {
+		switch {
+		case m.allNS:
+			// Each namespace's cache belonged to the old token; the status
+			// line offers ^r to rebuild them.
+			m.header = cache.Header{}
+		case m.ix != nil:
 			cmds = append(cmds, m.adopt(m.entries, m.header, true))
 		}
 		return tea.Batch(cmds...)
 	}
-	if m.ix != nil {
+	if m.ix != nil && !m.allNS {
 		return tea.Batch(append(cmds, m.adopt(m.entries, m.header, false))...)
 	}
 	return tea.Batch(append(cmds, m.reindex())...)

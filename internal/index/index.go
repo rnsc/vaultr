@@ -19,6 +19,9 @@ type Entry struct {
 	Mount string   `json:"m"` // e.g. "secret/"
 	KV    int      `json:"v"`
 	Keys  []string `json:"k,omitempty"`
+	// Namespace is set when searching several namespaces at once ("" is
+	// the root). Each namespace has its own cache, so it isn't stored.
+	Namespace string `json:"-"`
 }
 
 // Rel returns the path relative to its mount.

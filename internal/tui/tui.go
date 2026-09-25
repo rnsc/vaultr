@@ -46,6 +46,9 @@ type Backend interface {
 	// Adopt saves entries, indexed with an earlier token, under the current
 	// token when both belong to the same identity; false means rebuild.
 	Adopt(ctx context.Context, entries []index.Entry, prev cache.Header) (cache.Header, bool, string, error)
+	// AllNamespaces loads (or, with rebuild, crawls) every namespace the
+	// token can use; entries carry their namespace. The string is a warning.
+	AllNamespaces(ctx context.Context, rebuild bool, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error)
 }
 
 // Options for Run.
@@ -128,6 +131,8 @@ type model struct {
 	login  loginState
 	cfg    configState
 	ns     nsState
+	// allNS searches every namespace at once (the switcher's first entry).
+	allNS  bool
 	banner string // persistent problem shown above the status line
 	// notice is a message (from a login or config save) shown together
 	// with the result of the reindex that follows it.
@@ -225,7 +230,12 @@ func (m model) Init() tea.Cmd {
 
 func (m *model) backend() Backend { return m.opt.Backend }
 
-func (m *model) startBuild() tea.Cmd {
+// startBuild crawls Vault again (all namespaces in allNS mode).
+func (m *model) startBuild() tea.Cmd { return m.startIndex(true) }
+
+// startIndex builds the index; in allNS mode, rebuild false loads the
+// namespaces that have a valid cache and builds only the others.
+func (m *model) startIndex(rebuild bool) tea.Cmd {
 	m.mode = modeBuilding
 	m.banner = ""
 	m.progress = index.Progress{}
@@ -234,6 +244,12 @@ func (m *model) startBuild() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	build := m.backend().Build
+	if m.allNS {
+		all := m.backend().AllNamespaces
+		build = func(ctx context.Context, p func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+			return all(ctx, rebuild, p)
+		}
+	}
 	go func() {
 		entries, h, warn, err := build(ctx, func(p index.Progress) {
 			select {
@@ -294,6 +310,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setEntries(msg.entries)
 		m.mode = modeList
 		text, isErr := fmt.Sprintf("indexed %d secrets", len(msg.entries)), false
+		if m.allNS { // loaded from the caches where they were valid
+			text = fmt.Sprintf("%d secrets across all namespaces", len(msg.entries))
+		}
 		if msg.warning != "" {
 			text, isErr = text+"; "+msg.warning, true
 		}
@@ -405,6 +424,9 @@ func (m model) updateBuilding(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) reindex() tea.Cmd {
 	if m.backend().Client().Token() == "" {
 		return m.openLogin("No Vault token found.")
+	}
+	if m.allNS {
+		return m.startIndex(false)
 	}
 	b := m.backend()
 	return func() tea.Msg {
@@ -586,8 +608,17 @@ func (m model) listHeight() int {
 	return h
 }
 
-func (m model) fetch(e *index.Entry) tea.Cmd {
+// clientFor is the client reading e: in allNS mode, one in e's namespace.
+func (m model) clientFor(e *index.Entry) *vault.Client {
 	c := m.opt.Backend.Client()
+	if m.allNS {
+		return c.InNamespace(e.Namespace)
+	}
+	return c
+}
+
+func (m model) fetch(e *index.Entry) tea.Cmd {
+	c := m.clientFor(e)
 	path := e.Path
 	mount := vault.Mount{Path: e.Mount, KVVersion: e.KV}
 	rel := e.Rel()
@@ -600,7 +631,7 @@ func (m model) fetch(e *index.Entry) tea.Cmd {
 }
 
 func (m model) fetchAndCopy(row search.Row) tea.Cmd {
-	c := m.opt.Backend.Client()
+	c := m.clientFor(row.Entry)
 	mount := vault.Mount{Path: row.Entry.Mount, KVVersion: row.Entry.KV}
 	rel, key := row.Entry.Rel(), row.Key
 	return func() tea.Msg {
@@ -683,7 +714,7 @@ func (m model) viewList() string {
 	lines := 0
 	for i := m.offset; i < end; i++ {
 		r := m.results[i]
-		line := renderRow(r, terms, m.width-2)
+		line := renderRow(r, terms, m.width-2, m.allNS)
 		if i == m.cursor {
 			line = sPointer.Render("▌") + sSel.Width(m.width-1).Render(line)
 		} else {
@@ -722,7 +753,9 @@ func (m model) statusLine() string {
 		total = len(m.ix.Rows)
 	}
 	s := fmt.Sprintf("%d/%d", len(m.results), total)
-	if ns := m.opt.Backend.Client().Namespace; ns != "" {
+	if m.allNS {
+		s = "all namespaces · " + s
+	} else if ns := m.opt.Backend.Client().Namespace; ns != "" {
 		s = "ns " + ns + " · " + s
 	}
 	switch {
@@ -750,7 +783,11 @@ func (m model) statusLine() string {
 func (m model) viewDetail() string {
 	d := m.detail
 	var b strings.Builder
-	b.WriteString(sTitle.Render(d.row.Entry.Path) + "\n\n")
+	title := sTitle.Render(d.row.Entry.Path)
+	if m.allNS {
+		title = sSubtle.Render(nsLabel(d.row.Entry.Namespace)+" · ") + title
+	}
+	b.WriteString(title + "\n\n")
 	lines := 2
 	switch {
 	case d.loading:
@@ -793,11 +830,14 @@ func (m model) viewDetail() string {
 	return b.String()
 }
 
-func renderRow(r search.Row, terms []string, width int) string {
+func renderRow(r search.Row, terms []string, width int, withNS bool) string {
 	e := r.Entry
 	mount := highlight(e.Mount, terms, sSubtle)
 	rest := highlight(e.Rel(), terms, lipgloss.NewStyle())
 	s := mount + rest
+	if withNS {
+		s = highlight(nsLabel(e.Namespace), terms, sKey) + sSubtle.Render(" · ") + s
+	}
 	if r.Key != "" {
 		s += sSubtle.Render("  ⟶ ") + highlight(r.Key, terms, sKey)
 	}
