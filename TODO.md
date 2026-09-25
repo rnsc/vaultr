@@ -10,12 +10,14 @@ live.
 - [x] Auto-login (`auth.auto_login`), resume after login, keeping the index
   after a re-login by the same identity, token expiry countdown (v0.6.0).
 - [x] `vaultr env` / `vaultr exec` (v0.7.0).
-- [x] Search across all namespaces, retry on HTTP 429 (v0.8.x).
+- [x] Search across all namespaces (v0.8.0), retry on HTTP 429 (v0.8.1).
 
 ## Next
 
-- [ ] **Versions and metadata** (branch `secret-versions`) (KV v2) in the secret view: who changed it,
-  when, how many versions; view an older version.
+- [ ] **Versions and metadata** (KV v2, branch `secret-versions`): which
+  version is shown and when it was written, step to older ones, `vaultr
+  versions`, `get --version`. Vault doesn't record who wrote a version.
+
 ## Later
 
 - [ ] **Open in the Vault UI:** a TUI key and `vaultr open PATH` open the
