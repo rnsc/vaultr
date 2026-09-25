@@ -34,7 +34,6 @@ live.
     only narrows what is in memory at any time.
   - Test on Linux that another process of the same user can't read the
     memory.
-
 - [ ] **Open in the Vault UI:** a TUI key and `vaultr open PATH` open the
   secret's page in the browser, in the right namespace.
 - [ ] **Profiles for several servers:** `[profile.prod]`, `--profile`, a
