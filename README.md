@@ -244,12 +244,42 @@ role     = ""        # the mount's default role
 # namespace = "/"    # where to log in; defaults to token_namespace, else root
 # username = "jdoe"  # for ldap / userpass
 # callback_port = 8250
+# auto_login = true  # log in by yourself when the token is missing or expired
 ```
 
 Your OIDC role must allow the redirect URI
 `http://localhost:8250/oidc/callback`, the same one the `vault` CLI uses.
 Flags override the config: `-method`, `-mount`, `-namespace`,
 `-username`, `-role`, `-callback-port`.
+
+#### When the token expires
+
+- **The status line counts down** to the token's expiry ("token 1h20m").
+  Under 10 minutes it turns yellow; for a token that can't be renewed it
+  suggests `^l` to log in again.
+- **You don't lose your place.** If opening a secret, copying a value
+  (`^y`) or refreshing the index fails because the token expired or was
+  revoked, vaultr asks you to log in, then finishes that action with the
+  new token. Your search and selection stay as they were. A secret
+  already open keeps its values on screen, so revealing and copying them
+  still work after expiry.
+- **The index is kept** when the same person logs in again: vaultr saves
+  it under the new token instead of crawling Vault again. It checks the
+  token's identity (its Vault entity) to decide. If someone else logs in,
+  or the token has no identity (root tokens, tokens created by hand), the
+  index is rebuilt for them.
+
+With `auto_login = true` in `[auth]`, vaultr logs in by itself when the
+token is missing, expired or revoked:
+
+- **OIDC** opens the browser right away; you only approve the login.
+- **ldap / userpass** open the login screen with your username filled in
+  and the cursor on the password.
+- **CLI commands** (`find`, `get`, `index`) log in first, then run, but
+  only in a terminal. Scripts and pipes get the usual error instead of a
+  prompt.
+- A failed automatic login isn't retried by itself, and tab completion
+  never logs in.
 
 ### Editing the config in the TUI
 

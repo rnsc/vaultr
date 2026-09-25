@@ -61,6 +61,19 @@ type Header struct {
 	KeyRef string `json:"key_ref,omitempty"`
 	// TokenNamespace is where the token (and so the cubbyhole) lives.
 	TokenNamespace string `json:"token_namespace,omitempty"`
+	// Owner identifies who the index was built for (a hash of the token's
+	// entity ID), so a later login by the same person can keep it. Empty
+	// for tokens without an identity.
+	Owner string `json:"owner,omitempty"`
+}
+
+// ownerOf hashes an entity ID for the header, which is stored in clear.
+func ownerOf(entityID string) string {
+	if entityID == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte("vaultr owner\x00" + entityID))
+	return hex.EncodeToString(h[:16])
 }
 
 // Bound reports whether the cache is bound to server-side key material.
@@ -97,6 +110,7 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 		Salt:      randBytes(32),
 
 		TokenNamespace: ti.Namespace,
+		Owner:          ownerOf(ti.EntityID),
 	}
 	if !ti.ExpireTime.IsZero() && ti.ExpireTime.Before(h.Expires) {
 		h.Expires = ti.ExpireTime.UTC()
@@ -153,6 +167,26 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 		return Header{}, "", err
 	}
 	return h, warning, nil
+}
+
+// Adopt saves entries, built with an earlier token, under the current one
+// when both belong to the same identity (prev is the earlier header): the
+// same person logging in again keeps their index without a re-crawl. It
+// reports false, and saves nothing, when the identities differ or are
+// unknown.
+func (s *Store) Adopt(ctx context.Context, entries []index.Entry, prev Header, maxAge time.Duration) (Header, bool, string, error) {
+	if prev.Owner == "" || prev.Addr != s.Client.Addr || prev.Namespace != s.Client.Namespace {
+		return Header{}, false, "", nil
+	}
+	ti, err := s.Client.LookupSelf(ctx)
+	if err != nil {
+		return Header{}, false, "", err
+	}
+	if ownerOf(ti.EntityID) != prev.Owner {
+		return Header{}, false, "", nil
+	}
+	h, warn, err := s.Save(ctx, entries, maxAge)
+	return h, err == nil, warn, err
 }
 
 // Load decrypts the cache. Any error wrapping ErrStale means a rebuild is

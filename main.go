@@ -138,9 +138,21 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	interactive := cmd == "" || !isCommand(cmd)
-	a, err := newApp(!interactive && cmd != "login", nsOverride)
+	a, err := newApp(false, nsOverride)
 	if err != nil {
 		return err
+	}
+	if !interactive {
+		switch cmd {
+		case "login":
+		case "find", "search", "f", "get", "g", "index", "reindex", "refresh":
+			err = a.ensureToken(ctx)
+		default:
+			err = a.settings.RequireToken()
+		}
+		if err != nil {
+			return err
+		}
 	}
 	switch cmd {
 	case "login":
@@ -333,6 +345,12 @@ func (a *app) SwitchNamespace(ns string) {
 	a.apply(a.settings, a.client.InNamespace(ns))
 }
 
+// Adopt keeps an index built with an earlier token after a new login by
+// the same identity, saving it under the new token.
+func (a *app) Adopt(ctx context.Context, entries []index.Entry, prev cache.Header) (cache.Header, bool, string, error) {
+	return a.store.Adopt(ctx, entries, prev, a.maxAge)
+}
+
 // LoginRequest fills a login request from the configured defaults.
 func LoginRequest(s config.AuthSettings) auth.Request {
 	m, err := auth.ParseMethod(s.Method)
@@ -375,7 +393,20 @@ func (a *app) login(ctx context.Context, args []string) error {
 	if *noSave {
 		a.settings.Auth.SaveToken = false
 	}
+	if err := a.promptLogin(ctx, r); err != nil {
+		return err
+	}
+	if !a.settings.Auth.SaveToken {
+		// Nothing persisted: hand the token to the caller.
+		fmt.Println(a.client.Token())
+	}
+	return nil
+}
 
+// promptLogin asks for what the method needs on the terminal, logs in and
+// reports on stderr.
+func (a *app) promptLogin(ctx context.Context, r auth.Request) error {
+	var err error
 	switch r.Method {
 	case auth.LDAP, auth.Userpass:
 		if r.Username == "" {
@@ -411,11 +442,27 @@ func (a *app) login(ctx context.Context, args []string) error {
 	if warn != "" {
 		fmt.Fprintln(os.Stderr, "warning:", warn)
 	}
-	if !a.settings.Auth.SaveToken {
-		// Nothing persisted: hand the token to the caller.
-		fmt.Println(a.client.Token())
-	}
 	return nil
+}
+
+// ensureToken makes sure a command has a token. With auth.auto_login on a
+// terminal, a missing, expired or revoked token means logging in first;
+// otherwise a missing token is an error and a dead one fails later with a
+// hint to log in. Scripts (no terminal) never get a login prompt.
+func (a *app) ensureToken(ctx context.Context) error {
+	if !a.settings.Auth.AutoLogin || !term.IsTerminal(int(os.Stdin.Fd())) || !isatty.IsTerminal(os.Stderr.Fd()) {
+		return a.settings.RequireToken()
+	}
+	why := "no Vault token found"
+	if a.client.Token() != "" {
+		_, err := a.client.LookupSelf(ctx)
+		if !errors.Is(err, vault.ErrTokenInvalid) {
+			return nil // valid, or another problem the command will report
+		}
+		why = "the token is expired or revoked"
+	}
+	fmt.Fprintf(os.Stderr, "%s; logging in (auth.auto_login)\n", why)
+	return a.promptLogin(ctx, LoginRequest(a.settings.Auth))
 }
 
 func nsFlag(ns string) string {

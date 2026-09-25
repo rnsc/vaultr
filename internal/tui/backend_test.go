@@ -34,6 +34,7 @@ type fakeBackend struct {
 	login     func(context.Context, auth.Request) (string, string, error)
 	reload    func() error
 	nsList    func(context.Context) ([]string, error)
+	adopt     func(context.Context, []index.Entry, cache.Header) (cache.Header, bool, string, error)
 
 	mu       sync.Mutex
 	switches []string
@@ -63,6 +64,9 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 		return "logged in", "", nil
 	}
 	fb.reload = func() error { return nil }
+	fb.adopt = func(context.Context, []index.Entry, cache.Header) (cache.Header, bool, string, error) {
+		return cache.Header{}, false, "", nil
+	}
 	fb.nsList = func(context.Context) ([]string, error) {
 		return []string{"", "team-a", "team-a/child", "team-b"}, nil
 	}
@@ -82,6 +86,9 @@ func (f *fakeBackend) Login(ctx context.Context, r auth.Request) (string, string
 	f.logins = append(f.logins, r)
 	f.mu.Unlock()
 	return f.login(ctx, r)
+}
+func (f *fakeBackend) Adopt(ctx context.Context, e []index.Entry, h cache.Header) (cache.Header, bool, string, error) {
+	return f.adopt(ctx, e, h)
 }
 func (f *fakeBackend) Namespaces(ctx context.Context) ([]string, error) { return f.nsList(ctx) }
 func (f *fakeBackend) SwitchNamespace(ns string) {

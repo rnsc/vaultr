@@ -43,6 +43,9 @@ type Backend interface {
 	Namespaces(ctx context.Context) ([]string, error)
 	// SwitchNamespace makes ns the namespace for the rest of the session.
 	SwitchNamespace(ns string)
+	// Adopt saves entries, indexed with an earlier token, under the current
+	// token when both belong to the same identity; false means rebuild.
+	Adopt(ctx context.Context, entries []index.Entry, prev cache.Header) (cache.Header, bool, string, error)
 }
 
 // Options for Run.
@@ -111,6 +114,7 @@ type model struct {
 	mode   mode
 
 	ix      *search.Index
+	entries []index.Entry // what ix was built from, kept to re-save after a login
 	header  cache.Header
 	results []search.Row
 	cursor  int
@@ -133,6 +137,16 @@ type model struct {
 	fatal     error
 	flash     string
 	flashErr  bool
+
+	// pending is the action a dead token interrupted; it runs again after
+	// the next successful login.
+	pending *pendingAction
+	// autoTried stops auth.auto_login from retrying a login that failed.
+	autoTried bool
+	// token is what the last lookup said about the token (expiry).
+	token    vault.TokenInfo
+	tokenOK  bool
+	tickLive bool // a once-a-minute redraw is scheduled
 }
 
 type detailState struct {
@@ -159,6 +173,7 @@ type (
 		err    error
 	}
 	copyValueMsg struct {
+		row   search.Row
 		label string
 		value string
 		err   error
@@ -191,6 +206,7 @@ func newModel(opt Options) model {
 }
 
 func (m *model) setEntries(e []index.Entry) {
+	m.entries = e
 	m.ix = search.New(e)
 	m.refresh()
 }
@@ -204,7 +220,7 @@ func (m *model) refresh() {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.initCmd)
+	return tea.Batch(textinput.Blink, m.initCmd, m.lookupToken())
 }
 
 func (m *model) backend() Backend { return m.opt.Backend }
@@ -254,6 +270,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		if msg.err != nil {
 			if errors.Is(msg.err, vault.ErrTokenInvalid) {
+				if m.ix != nil { // a refresh: redo it after the login
+					return m, m.loginToResume(pendingAction{kind: pendingBuild})
+				}
 				return m, m.openLogin("Your token is missing, expired or revoked.")
 			}
 			m.mode = modeList
@@ -290,6 +309,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != modeDetail || msg.path != m.detail.row.Entry.Path {
 			return m, nil
 		}
+		if errors.Is(msg.err, vault.ErrTokenInvalid) {
+			return m, m.loginToResume(pendingAction{kind: pendingOpen, row: m.detail.row})
+		}
 		m.detail.loading = false
 		m.detail.err = msg.err
 		m.detail.values = msg.values
@@ -304,6 +326,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case copyValueMsg:
+		if errors.Is(msg.err, vault.ErrTokenInvalid) {
+			return m, m.loginToResume(pendingAction{kind: pendingCopy, row: msg.row})
+		}
 		if msg.err != nil {
 			return m, m.setFlash(msg.err.Error(), true)
 		}
@@ -325,6 +350,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.loginDone(msg)
 	case cacheMsg:
 		return m.cacheLoaded(msg)
+	case adoptMsg:
+		return m.adopted(msg)
+	case tokenMsg:
+		return m.tokenLooked(msg)
+	case minuteMsg:
+		if !m.tokenOK || m.token.ExpireTime.IsZero() {
+			m.tickLive = false
+			return m, nil
+		}
+		return m, everyMinute() // redraw so the token countdown moves
 	case namespacesMsg:
 		return m.namespacesLoaded(msg)
 	case tea.KeyMsg:
@@ -560,7 +595,7 @@ func (m model) fetch(e *index.Entry) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		data, err := c.ReadSecret(ctx, mount, rel)
-		return secretMsg{path: path, values: vault.Stringify(data), err: withLoginHint(err)}
+		return secretMsg{path: path, values: vault.Stringify(data), err: tokenDead(ctx, c, err)}
 	}
 }
 
@@ -573,7 +608,7 @@ func (m model) fetchAndCopy(row search.Row) tea.Cmd {
 		defer cancel()
 		data, err := c.ReadSecret(ctx, mount, rel)
 		if err != nil {
-			return copyValueMsg{err: withLoginHint(err)}
+			return copyValueMsg{row: row, err: tokenDead(ctx, c, err)}
 		}
 		v, ok := vault.Stringify(data)[key]
 		if !ok {
@@ -690,14 +725,26 @@ func (m model) statusLine() string {
 	if ns := m.opt.Backend.Client().Namespace; ns != "" {
 		s = "ns " + ns + " · " + s
 	}
-	if !m.header.Expires.IsZero() {
+	switch {
+	case !m.header.Expires.IsZero():
 		left := time.Until(m.header.Expires).Round(time.Minute)
 		s += fmt.Sprintf(" · cache expires in %s", left)
 		if !m.header.Bound() {
 			s += " (unbound)"
 		}
+	case m.ix != nil:
+		s += " · index not saved for this login (^r rebuilds it)"
 	}
-	return sSubtle.Render(truncate(s, m.width))
+	tok, warn := m.tokenStatus()
+	if tok == "" {
+		return sSubtle.Render(truncate(s, m.width))
+	}
+	// The token part comes first when it needs attention, so truncation
+	// on narrow terminals never hides it.
+	if warn {
+		return truncate(sWarn.Render(tok)+sSubtle.Render(" · "+s), m.width)
+	}
+	return sSubtle.Render(truncate(s+" · "+tok, m.width))
 }
 
 func (m model) viewDetail() string {
@@ -829,11 +876,16 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// withLoginHint adds a hint to permission errors, which usually mean the
-// token expired during the session.
-func withLoginHint(err error) error {
-	if err != nil && errors.Is(err, vault.ErrForbidden) {
-		return fmt.Errorf("%w (token expired? ^l to log in)", err)
+// tokenDead tells an expired or revoked token apart from a policy denial:
+// Vault answers both with "permission denied", so on that error it asks
+// whether the token is still valid. A dead token's error wraps
+// vault.ErrTokenInvalid.
+func tokenDead(ctx context.Context, c *vault.Client, err error) error {
+	if err == nil || !errors.Is(err, vault.ErrForbidden) {
+		return err
+	}
+	if _, lerr := c.LookupSelf(ctx); errors.Is(lerr, vault.ErrTokenInvalid) {
+		return fmt.Errorf("%w (%w)", vault.ErrTokenInvalid, err)
 	}
 	return err
 }

@@ -107,6 +107,14 @@ func (m *model) openLogin(reason string) tea.Cmd {
 	m.login = l
 	m.mode = modeLogin
 	m.focusLogin()
+	// auth.auto_login: when vaultr (not the user) opened this screen, an
+	// OIDC login needs nothing typed, so start it. Other methods wait for
+	// the password, with the cursor already there. A failed attempt isn't
+	// retried by itself.
+	if reason != "" && s.AutoLogin && s.Method == string(auth.OIDC) && !m.autoTried {
+		m.autoTried = true
+		return tea.Batch(textinput.Blink, m.submitLogin())
+	}
 	return textinput.Blink
 }
 
@@ -143,6 +151,7 @@ func (m model) updateLogin(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc":
 		m.mode = modeList
+		m.pending = nil
 		if m.ix == nil && m.banner == "" {
 			m.banner = "Not logged in."
 		}
@@ -222,7 +231,8 @@ func (m model) loginDone(msg loginDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.warning != "" {
 		m.notice, m.noticeErr = msg.summary+"; "+msg.warning, true
 	}
-	return m, m.reindex()
+	cmd := m.afterLogin()
+	return m, cmd
 }
 
 func (m model) viewLogin() string {

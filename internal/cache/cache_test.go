@@ -23,6 +23,7 @@ type fakeVault struct {
 	expire time.Time
 	now    time.Time
 	cubby  map[string]json.RawMessage
+	entity string
 }
 
 func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +39,7 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "auth/token/lookup-self":
 		exp := f.expire.Format(time.RFC3339)
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"expire_time": exp}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"expire_time": exp, "entity_id": f.entity}})
 	case strings.HasPrefix(p, "cubbyhole/"):
 		switch r.Method {
 		case http.MethodPost:
@@ -170,5 +171,49 @@ func TestTamperDetected(t *testing.T) {
 	_ = os.WriteFile(s.File(), raw, 0o600)
 	if _, _, err := s.Load(ctx); !errors.Is(err, ErrStale) {
 		t.Fatalf("want ErrStale, got %v", err)
+	}
+}
+
+func TestAdoptKeepsIndexForSameIdentity(t *testing.T) {
+	fv, s := setup(t)
+	ctx := context.Background()
+	fv.entity = "ent-alice"
+	old, _, err := s.Save(ctx, sample, 0)
+	if err != nil || old.Owner == "" || strings.Contains(old.Owner, "alice") {
+		t.Fatalf("owner %q (should be a hash): %v", old.Owner, err)
+	}
+
+	// Alice logs in again: a new token (and cubbyhole), the same entity.
+	relogin := func(token, entity string) *Store {
+		fv.mu.Lock()
+		fv.token, fv.entity, fv.cubby = token, entity, map[string]json.RawMessage{}
+		fv.mu.Unlock()
+		c, _ := vault.New(vault.Config{Addr: s.Client.Addr, Token: token})
+		return &Store{Dir: s.Dir, Client: c}
+	}
+	s2 := relogin("hvs.alice2", "ent-alice")
+	if _, _, err := s2.Load(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("the old file should not open with the new token: %v", err)
+	}
+	h, ok, _, err := s2.Adopt(ctx, sample, old, 0)
+	if err != nil || !ok || !h.Bound() {
+		t.Fatalf("adopt: ok %v, bound %v, %v", ok, h.Bound(), err)
+	}
+	if got, _, err := s2.Load(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("load after adopt: %v %v", got, err)
+	}
+
+	// Someone else, or a token with no identity: nothing is saved.
+	for _, entity := range []string{"ent-bob", ""} {
+		s3 := relogin("hvs.other-"+entity, entity)
+		if _, ok, _, err := s3.Adopt(ctx, sample, h, 0); ok || err != nil {
+			t.Errorf("entity %q: adopted (%v, %v)", entity, ok, err)
+		}
+	}
+	noOwner := h
+	noOwner.Owner = ""
+	s4 := relogin("hvs.alice3", "ent-alice")
+	if _, ok, _, _ := s4.Adopt(ctx, sample, noOwner, 0); ok {
+		t.Error("adopted an index with no recorded owner")
 	}
 }

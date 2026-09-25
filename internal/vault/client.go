@@ -46,8 +46,9 @@ type Client struct {
 
 	mu        sync.Mutex
 	tokenNS   string
-	tokenNSOK bool   // tokenNS is known
-	tokenNSBy string // how it was determined
+	tokenNSOK bool       // tokenNS is known
+	tokenNSBy string     // how it was determined
+	lastInfo  *TokenInfo // from the last successful lookup of this token
 }
 
 // Config holds connection settings.
@@ -128,7 +129,7 @@ func (c *Client) InNamespace(ns string) *Client {
 	defer c.mu.Unlock()
 	return &Client{
 		Addr: c.Addr, Namespace: strings.Trim(ns, "/"), token: c.token, http: c.http,
-		tokenNS: c.tokenNS, tokenNSOK: c.tokenNSOK, tokenNSBy: c.tokenNSBy,
+		tokenNS: c.tokenNS, tokenNSOK: c.tokenNSOK, tokenNSBy: c.tokenNSBy, lastInfo: c.lastInfo,
 	}
 }
 
@@ -139,6 +140,7 @@ func (c *Client) SetToken(token, ns string) {
 	defer c.mu.Unlock()
 	c.token = token
 	c.tokenNS, c.tokenNSOK, c.tokenNSBy = strings.Trim(ns, "/"), true, "login"
+	c.lastInfo = nil
 }
 
 // Response is the generic Vault response envelope.
@@ -383,6 +385,11 @@ type TokenInfo struct {
 	ExpireTime time.Time // zero for non-expiring tokens
 	ServerTime time.Time
 	Namespace  string // namespace the token belongs to ("" = root)
+	Renewable  bool
+	// EntityID is the identity the token was issued to; the same person
+	// logging in again gets the same one. Empty for tokens without an
+	// identity (root tokens, tokens created directly).
+	EntityID string
 }
 
 type lookupData struct {
@@ -390,9 +397,12 @@ type lookupData struct {
 	ExpireTime    *string `json:"expire_time"`
 	TTL           int64   `json:"ttl"`
 	NamespacePath *string `json:"namespace_path"`
+	Renewable     bool    `json:"renewable"`
+	EntityID      string  `json:"entity_id"`
 }
 
 func (c *Client) lookupIn(ctx context.Context, ns string) (TokenInfo, *string, error) {
+	tok := c.Token()
 	resp, err := c.doIn(ctx, ns, http.MethodGet, "auth/token/lookup-self", nil, nil)
 	if err != nil {
 		if errors.Is(err, ErrForbidden) {
@@ -404,7 +414,7 @@ func (c *Client) lookupIn(ctx context.Context, ns string) (TokenInfo, *string, e
 	if err := json.Unmarshal(resp.Data, &d); err != nil {
 		return TokenInfo{}, nil, err
 	}
-	ti := TokenInfo{Accessor: d.Accessor, ServerTime: resp.ServerTime, Namespace: ns}
+	ti := TokenInfo{Accessor: d.Accessor, ServerTime: resp.ServerTime, Namespace: ns, Renewable: d.Renewable, EntityID: d.EntityID}
 	if ti.ServerTime.IsZero() {
 		ti.ServerTime = time.Now()
 	}
@@ -416,7 +426,24 @@ func (c *Client) lookupIn(ctx context.Context, ns string) (TokenInfo, *string, e
 	if ti.ExpireTime.IsZero() && d.TTL > 0 {
 		ti.ExpireTime = ti.ServerTime.Add(time.Duration(d.TTL) * time.Second)
 	}
+	c.mu.Lock()
+	if c.token == tok {
+		info := ti
+		c.lastInfo = &info
+	}
+	c.mu.Unlock()
 	return ti, d.NamespacePath, nil
+}
+
+// LastTokenInfo returns what the last successful lookup of the current
+// token said, without contacting the server.
+func (c *Client) LastTokenInfo() (TokenInfo, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastInfo == nil {
+		return TokenInfo{}, false
+	}
+	return *c.lastInfo, true
 }
 
 // LookupSelf validates the token and returns its expiry. On first use it
