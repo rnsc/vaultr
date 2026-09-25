@@ -334,3 +334,15 @@ func TestSecretVersions(t *testing.T) {
 		t.Errorf("kv1 version: %v", err)
 	}
 }
+
+func TestUIURL(t *testing.T) {
+	c, _ := New(Config{Addr: "https://vault.example.com:8200/", Token: "t"})
+	if got := c.UIURL(Mount{Path: "secret/", KVVersion: 2}, "app/db"); got != "https://vault.example.com:8200/ui/vault/secrets/secret/show/app/db" {
+		t.Errorf("plain: %s", got)
+	}
+	ns := c.InNamespace("team-a/child")
+	if got := ns.UIURL(Mount{Path: "team/kv/", KVVersion: 1}, "odd/with space/hash#tag"); got !=
+		"https://vault.example.com:8200/ui/vault/secrets/team%2Fkv/show/odd/with%20space/hash%23tag?namespace=team-a%2Fchild" {
+		t.Errorf("namespace, nested mount, odd names: %s", got)
+	}
+}

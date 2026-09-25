@@ -136,6 +136,9 @@ func TestVersions(t *testing.T) {
 	eq(t, run(t, "versions", "secret/p"), []string{"secret/prod/"}, "path")
 	eq(t, run(t, "versions", "secret/prod/db", ""), nil, "one path only")
 	eq(t, run(t, "get", "--version", ""), nil, "a version number")
+	eq(t, run(t, "open", "secret/p"), []string{"secret/prod/"}, "open: path")
+	eq(t, run(t, "open", "secret/prod/db", ""), nil, "open: one path only")
+	eq(t, run(t, "open", "--p"), []string{"--print"}, "open flags")
 	eq(t, run(t, "get", "--version", "2", "secret/p"), []string{"secret/prod/"}, "path after --version N")
 	eq(t, run(t, "get", "--version", "2", "secret/prod/db/postgres", "p"), []string{"password", "port"}, "keys after --version N")
 }

@@ -159,6 +159,15 @@ vaultr get --version 2 secret/prod/db/postgres password
 Vault records when each version was written, not who wrote it (only its
 audit log knows). KV v1 mounts keep no versions.
 
+### Opening a secret in the Vault UI
+
+Press `o` in the secret view, or run `vaultr open PATH` (`--print` just
+prints the address), to open the secret in the Vault web UI, in the right
+namespace. Use it for what vaultr doesn't do, like editing. The UI may
+ask you to log in first; it then takes you to the secret. On Vault 1.15
+and later, KV v2 secrets open on their Overview tab; the values are on the
+Secret tab.
+
 ### Finding secrets added recently
 
 The index is a snapshot, rebuilt at most every 2 hours. If a secret was
@@ -187,6 +196,7 @@ thousand secrets.
 | `^r`                | refresh the index                 | `esc`           | back          |
 | `^l`                | log in (again)                    | `^c`            | quit          |
 | `^e`                | edit the config file              | `[` / `]`       | older / newer version (KV v2) |
+|                     |                                   | `o`             | open in the Vault UI |
 | `^n`                | switch namespace ([more](#switching-namespaces)) |  |               |
 | `esc`               | clear the search (never quits)    |                 |               |
 | `^c`                | clear the search, or quit if it's empty |           |               |

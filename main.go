@@ -47,6 +47,7 @@ Usage:
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
   vaultr versions PATH           list a secret's versions (KV v2); read an
                                  older one with get --version N
+  vaultr open [--print] PATH     open a secret in the Vault web UI
   vaultr env [flags] PATH...     print the secrets' keys as shell exports
                                  (--prefix APP_, --format sh|fish|json)
   vaultr exec PATH... -- CMD     run CMD with the secrets' keys as
@@ -161,7 +162,7 @@ func run(ctx context.Context, args []string) error {
 	if !interactive {
 		switch cmd {
 		case "login":
-		case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh":
+		case "find", "search", "f", "get", "g", "versions", "open", "env", "exec", "index", "reindex", "refresh":
 			err = a.ensureToken(ctx)
 		default:
 			err = a.settings.RequireToken()
@@ -179,6 +180,8 @@ func run(ctx context.Context, args []string) error {
 		return a.get(ctx, args[1:])
 	case "versions":
 		return a.versions(ctx, args[1:])
+	case "open":
+		return a.open(ctx, args[1:])
 	case "env":
 		return a.env(ctx, args[1:])
 	case "exec":
@@ -550,7 +553,7 @@ func configCmd(args []string) error {
 
 func isCommand(cmd string) bool {
 	switch cmd {
-	case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
+	case "find", "search", "f", "get", "g", "versions", "open", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
 		return true
 	}
 	return strings.HasPrefix(cmd, "-")

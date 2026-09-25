@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rnsc/vaultr/internal/auth"
 	"github.com/rnsc/vaultr/internal/vault"
 )
 
@@ -83,4 +84,29 @@ func (a *app) versions(ctx context.Context, args []string) error {
 		fmt.Fprintf(out, "%d\t%s\t%s\n", v.N, v.Created.Local().Format(time.DateTime), versionState(v, meta.Current))
 	}
 	return nil
+}
+
+// open opens a secret's page in the Vault web UI (or prints its address),
+// for what vaultr doesn't do, like editing.
+func (a *app) open(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("open", flag.ContinueOnError)
+	printOnly := fs.Bool("print", false, "print the address instead of opening a browser")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return errors.New("usage: vaultr open [--print] PATH")
+	}
+	m, rel, err := a.mountAndRel(ctx, pos[0])
+	if err != nil {
+		return err
+	}
+	u := a.client.UIURL(m, rel)
+	if *printOnly {
+		fmt.Println(u)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "opening", u)
+	return auth.OpenBrowser(u)
 }

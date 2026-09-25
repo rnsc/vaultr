@@ -100,5 +100,5 @@ func (d detailState) versionHelp() string {
 	if d.meta == nil || len(d.meta.Versions) < 2 {
 		return ""
 	}
-	return " · [ ] older/newer version"
+	return " · [ ] versions"
 }

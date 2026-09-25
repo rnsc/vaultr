@@ -598,6 +598,13 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.fetch(d.row.Entry, d.version)
 	case "[", "]":
 		return m, m.stepVersion(msg.String() == "[")
+	case "o":
+		e := d.row.Entry
+		u := m.clientFor(e).UIURL(vault.Mount{Path: e.Mount, KVVersion: e.KV}, e.Rel())
+		if err := openBrowser(u); err != nil {
+			return m, m.setFlash("could not open a browser: "+u, true)
+		}
+		return m, m.setFlash("opened in the browser: "+u, false)
 	}
 	return m, nil
 }
@@ -876,7 +883,7 @@ func (m model) viewDetail() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · enter/c copy value · y copy path · R reload"+d.versionHelp()+" · esc back", m.width)))
+	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · c copy value · y copy path"+d.versionHelp()+" · o Vault UI · R reload · esc back", m.width)))
 	return b.String()
 }
 

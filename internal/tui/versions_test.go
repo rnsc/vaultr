@@ -60,7 +60,7 @@ func TestSecretViewVersions(t *testing.T) {
 	if m.detail.values["password"] != "pass-v3" || !strings.Contains(view(), "version 3 of 3 (current) · written 2h ago") {
 		t.Fatalf("current:\n%s", view())
 	}
-	if !strings.Contains(view(), "[ ] older/newer version") {
+	if !strings.Contains(view(), "[ ] versions") {
 		t.Errorf("help lacks the version keys:\n%s", view())
 	}
 
@@ -115,5 +115,21 @@ func TestAgo(t *testing.T) {
 	}
 	if got := ago(time.Now().Add(-100 * time.Hour)); !strings.HasPrefix(got, "on 20") {
 		t.Errorf("days ago: %q", got)
+	}
+}
+
+func TestOpenInVaultUI(t *testing.T) {
+	var opened string
+	orig := openBrowser
+	openBrowser = func(u string) error { opened = u; return nil }
+	t.Cleanup(func() { openBrowser = orig })
+	fb := newFakeBackend(t)
+	versionedVault(t, fb)
+	fb.client = fb.client.InNamespace("team-a")
+	m := newTest(t, Options{Backend: fb, Entries: versionedEntries})
+	m = typeText(t, m, "secret/app")
+	m = press(t, m, "enter", "o")
+	if !strings.HasSuffix(opened, "/ui/vault/secrets/secret/show/app?namespace=team-a") || !strings.Contains(m.flash, "opened in the browser") {
+		t.Errorf("opened %q, flash %q", opened, m.flash)
 	}
 }
