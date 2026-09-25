@@ -130,6 +130,18 @@ func TestNamespaces(t *testing.T) {
 	eq(t, Candidates(context.Background(), []Source{IndexSource{Entries: entries}}, []string{"--ns", ""}), nil, "no namespace source")
 }
 
+func TestEnvAndExec(t *testing.T) {
+	eq(t, run(t, "en"), []string{"env"}, "command")
+	eq(t, run(t, "env", "secret/p"), []string{"secret/prod/"}, "first path")
+	eq(t, run(t, "env", "secret/prod/db/postgres", "kv/leg"), []string{"kv/legacy/"}, "second path")
+	eq(t, run(t, "env", "--format", ""), []string{"sh", "fish", "json"}, "formats")
+	eq(t, run(t, "env", "--prefix", ""), nil, "prefix is free text")
+	eq(t, run(t, "env", "--prefix", "APP_", "sec"), []string{"secret/"}, "path after --prefix")
+	eq(t, run(t, "exec", "-"), []string{"--prefix", "--ns", "--namespace"}, "exec flags")
+	eq(t, run(t, "exec", "secret/prod/db/postgres", "--", "sec"), nil, "the command after --")
+	eq(t, run(t, "exec", "secret/prod/db/postgres", "--", "ls", "-"), nil, "the command's flags")
+}
+
 func TestNoSources(t *testing.T) {
 	// No token or no server: commands still complete, paths don't.
 	eq(t, Candidates(context.Background(), nil, []string{"ge"}), []string{"get"}, "commands")
