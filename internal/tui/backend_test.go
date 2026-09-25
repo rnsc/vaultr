@@ -39,6 +39,7 @@ type fakeBackend struct {
 
 	mu       sync.Mutex
 	switches []string
+	recent   []string
 	logins   []auth.Request
 	reloads  int
 }
@@ -93,6 +94,22 @@ func (f *fakeBackend) Login(ctx context.Context, r auth.Request) (string, string
 	f.logins = append(f.logins, r)
 	f.mu.Unlock()
 	return f.login(ctx, r)
+}
+func (f *fakeBackend) Recent() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.recent...)
+}
+func (f *fakeBackend) AddRecent(item string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{item}
+	for _, r := range f.recent {
+		if r != item {
+			out = append(out, r)
+		}
+	}
+	f.recent = out
 }
 func (f *fakeBackend) AllNamespaces(ctx context.Context, rebuild bool, _ func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
 	return f.allNS(ctx, rebuild)

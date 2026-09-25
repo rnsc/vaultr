@@ -418,6 +418,18 @@ func (c *Client) ReadSecret(ctx context.Context, m Mount, rel string) (map[strin
 	return d, nil
 }
 
+// UIURL is the secret's page in the Vault web UI. The /show/ address works
+// in every UI: OpenBao's and Vault's before 1.15 show the secret there,
+// newer ones redirect KV v2 secrets to their KV page (and Vault 2's
+// /secrets-engines/ accepts the older /secrets/ prefix).
+func (c *Client) UIURL(m Mount, rel string) string {
+	u := c.Addr + "/ui/vault/secrets/" + url.PathEscape(strings.TrimSuffix(m.Path, "/")) + "/show/" + escapePath(rel)
+	if c.Namespace != "" {
+		u += "?namespace=" + url.QueryEscape(c.Namespace)
+	}
+	return u
+}
+
 // ErrNoVersions means the mount keeps no versions (KV v1).
 var ErrNoVersions = errors.New("KV v1 mounts keep no versions")
 

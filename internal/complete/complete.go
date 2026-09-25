@@ -29,7 +29,7 @@ type NamespaceSource interface {
 
 // Commands and their flags, for completing the first word and options.
 var (
-	Commands = []string{"find", "get", "versions", "env", "exec", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
+	Commands = []string{"find", "get", "versions", "open", "env", "exec", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
 
 	// Every command but login takes --ns/--namespace, before or after it.
 	flags = map[string][]string{
@@ -37,6 +37,7 @@ var (
 		"find":     {"--json", "--values", "-n", "-r", "--refresh", "--all-ns", "--ns", "--namespace"},
 		"get":      {"--json", "--version", "--ns", "--namespace"},
 		"versions": {"--json", "--ns", "--namespace"},
+		"open":     {"--print", "--ns", "--namespace"},
 		"env":      {"--prefix", "--format", "--ns", "--namespace"},
 		"exec":     {"--prefix", "--ns", "--namespace"},
 		"index":    {"--ns", "--namespace"},
@@ -83,12 +84,12 @@ func Candidates(ctx context.Context, sources []Source, args []string) []string {
 		return filter(flags[cmd], cur)
 	}
 	switch cmd {
-	case "get", "versions":
+	case "get", "versions", "open":
 		if last := prev[len(prev)-1]; last == "--version" || last == "-version" {
 			return nil // a version number
 		}
 		pos := positional(prev[1:], map[string]bool{"version": true})
-		if cmd == "versions" && len(pos) > 0 {
+		if cmd != "get" && len(pos) > 0 {
 			return nil
 		}
 		switch len(pos) {

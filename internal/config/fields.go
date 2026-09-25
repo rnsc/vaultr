@@ -54,6 +54,7 @@ var Fields = []Field{
 	{Key: "max_age", Kind: KindDuration, Help: "Cache lifetime, capped at 2h.", Example: `"2h"`, Env: "VAULTR_MAX_AGE"},
 	{Key: "paths_only", Kind: KindBool, Help: "Index paths only, without reading key names.", Example: "false", Env: "VAULTR_PATHS_ONLY", Default: "false"},
 	{Key: "clip_clear", Kind: KindDuration, Help: `Clear copied values from the clipboard after this long ("0" disables).`, Example: `"45s"`, Env: "VAULTR_CLIP_CLEAR"},
+	{Key: "reveal_timeout", Kind: KindDuration, Help: `Hide values revealed in the TUI again after this long ("0" keeps them shown).`, Example: `"30s"`, Env: "VAULTR_REVEAL_TIMEOUT"},
 	{Key: "cache_dir", Help: "Where the encrypted index lives.", Example: `""`, Env: "VAULTR_CACHE_DIR"},
 
 	{Key: "auth.method", Kind: KindChoice, Choices: []string{"", "oidc", "ldap", "userpass", "token"}, Help: "Login method for `vaultr login` and the TUI login screen.", Example: `"oidc"`},
@@ -112,6 +113,7 @@ func (f File) Values() map[string]string {
 		"max_age":            f.MaxAge,
 		"paths_only":         strconv.FormatBool(f.PathsOnly),
 		"clip_clear":         f.ClipClear,
+		"reveal_timeout":     f.RevealTimeout,
 		"cache_dir":          f.CacheDir,
 		"auth.method":        f.Auth.Method,
 		"auth.mount":         f.Auth.Mount,
@@ -170,6 +172,7 @@ func FromValues(v map[string]string) (File, error) {
 		MaxAge:         get("max_age"),
 		PathsOnly:      boolean("paths_only"),
 		ClipClear:      get("clip_clear"),
+		RevealTimeout:  get("reveal_timeout"),
 		CacheDir:       get("cache_dir"),
 		Auth: Auth{
 			Method:       strings.ToLower(get("auth.method")),
@@ -199,7 +202,7 @@ func FromValues(v map[string]string) (File, error) {
 // Validate checks values the TOML types don't.
 func Validate(f File) error {
 	var errs []error
-	for k, d := range map[string]string{"max_age": f.MaxAge, "clip_clear": f.ClipClear} {
+	for k, d := range map[string]string{"max_age": f.MaxAge, "clip_clear": f.ClipClear, "reveal_timeout": f.RevealTimeout} {
 		if d != "" && d != "0" {
 			if _, err := time.ParseDuration(d); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %q is not a duration (e.g. 30m, 2h)", k, d))

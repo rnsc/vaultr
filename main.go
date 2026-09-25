@@ -47,6 +47,7 @@ Usage:
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
   vaultr versions PATH           list a secret's versions (KV v2); read an
                                  older one with get --version N
+  vaultr open [--print] PATH     open a secret in the Vault web UI
   vaultr env [flags] PATH...     print the secrets' keys as shell exports
                                  (--prefix APP_, --format sh|fish|json)
   vaultr exec PATH... -- CMD     run CMD with the secrets' keys as
@@ -86,10 +87,15 @@ Settings:
   VAULTR_PATHS_ONLY  "1" to index paths without reading key names
   VAULTR_CLIP_CLEAR  clear copied values from the clipboard after this
                      long in the TUI (default 45s, 0 disables)
+  VAULTR_REVEAL_TIMEOUT hide revealed values in the TUI again after
+                     this long (default 30s, 0 keeps them shown)
   VAULTR_CACHE_DIR   where the encrypted index lives
+  VAULTR_ALLOW_DEBUG "1" lets debuggers attach to vaultr (it normally
+                     blocks that, and memory reads by other processes)
 `
 
 func main() {
+	harden()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	err := run(ctx, os.Args[1:])
@@ -156,7 +162,7 @@ func run(ctx context.Context, args []string) error {
 	if !interactive {
 		switch cmd {
 		case "login":
-		case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh":
+		case "find", "search", "f", "get", "g", "versions", "open", "env", "exec", "index", "reindex", "refresh":
 			err = a.ensureToken(ctx)
 		default:
 			err = a.settings.RequireToken()
@@ -174,6 +180,8 @@ func run(ctx context.Context, args []string) error {
 		return a.get(ctx, args[1:])
 	case "versions":
 		return a.versions(ctx, args[1:])
+	case "open":
+		return a.open(ctx, args[1:])
 	case "env":
 		return a.env(ctx, args[1:])
 	case "exec":
@@ -368,6 +376,12 @@ func (a *app) Adopt(ctx context.Context, entries []index.Entry, prev cache.Heade
 	return a.store.Adopt(ctx, entries, prev, a.maxAge)
 }
 
+// Recent and AddRecent keep the recently opened rows in the encrypted
+// index (tui.Backend).
+func (a *app) Recent() []string { return a.store.Recent() }
+
+func (a *app) AddRecent(item string) { _ = a.store.AddRecent(item) }
+
 // LoginRequest fills a login request from the configured defaults.
 func LoginRequest(s config.AuthSettings) auth.Request {
 	m, err := auth.ParseMethod(s.Method)
@@ -545,7 +559,7 @@ func configCmd(args []string) error {
 
 func isCommand(cmd string) bool {
 	switch cmd {
-	case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
+	case "find", "search", "f", "get", "g", "versions", "open", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
 		return true
 	}
 	return strings.HasPrefix(cmd, "-")

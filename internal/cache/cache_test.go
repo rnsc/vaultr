@@ -1,12 +1,14 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -215,5 +217,70 @@ func TestAdoptKeepsIndexForSameIdentity(t *testing.T) {
 	s4 := relogin("hvs.alice3", "ent-alice")
 	if _, ok, _, _ := s4.Adopt(ctx, sample, noOwner, 0); ok {
 		t.Error("adopted an index with no recorded owner")
+	}
+}
+
+func TestRecentPaths(t *testing.T) {
+	_, s := setup(t)
+	ctx := context.Background()
+	h, _, err := s.Save(ctx, sample, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"secret/a", "secret/b#k", "secret/a"} {
+		if err := s.AddRecent(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.Recent(); !reflect.DeepEqual(got, []string{"secret/a", "secret/b#k"}) {
+		t.Errorf("newest first, no duplicates: %q", got)
+	}
+
+	// Another store (a later run) reads them back; the key and expiry
+	// didn't change.
+	s2 := &Store{Dir: s.Dir, Client: s.Client}
+	entries, h2, err := s2.Load(ctx)
+	if err != nil || len(entries) != 1 || !reflect.DeepEqual(s2.Recent(), []string{"secret/a", "secret/b#k"}) {
+		t.Fatalf("reload: %v %q", err, s2.Recent())
+	}
+	if h2.KeyRef != h.KeyRef || !h2.Expires.Equal(h.Expires) || !h2.Created.Equal(h.Created) {
+		t.Errorf("header changed: %+v -> %+v", h, h2)
+	}
+
+	// At most MaxRecent; a rebuild keeps them.
+	for i := 0; i < 15; i++ {
+		_ = s2.AddRecent("secret/x" + string(rune('a'+i)))
+	}
+	if len(s2.Recent()) != MaxRecent {
+		t.Errorf("kept %d", len(s2.Recent()))
+	}
+	if _, _, err := s2.Save(ctx, sample, 0); err != nil {
+		t.Fatal(err)
+	}
+	s3 := &Store{Dir: s.Dir, Client: s.Client}
+	if _, _, err := s3.Load(ctx); err != nil || len(s3.Recent()) != MaxRecent || s3.Recent()[0] != "secret/xo" {
+		t.Errorf("after rebuild: %v %q", err, s3.Recent())
+	}
+
+	// Nothing loaded: nothing recorded.
+	empty := &Store{Dir: t.TempDir(), Client: s.Client}
+	if err := empty.AddRecent("secret/a"); err != nil || empty.Recent() != nil {
+		t.Errorf("without an index: %v %q", err, empty.Recent())
+	}
+}
+
+func TestOldFormatIsRebuilt(t *testing.T) {
+	_, s := setup(t)
+	ctx := context.Background()
+	if _, _, err := s.Save(ctx, sample, 0); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(s.File())
+	raw = bytes.Replace(raw, []byte(`"version":2`), []byte(`"version":1`), 1)
+	if err := os.WriteFile(s.File(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (&Store{Dir: s.Dir, Client: s.Client}).Load(ctx); !errors.Is(err, ErrStale) {
+		t.Errorf("format 1 file: %v", err)
 	}
 }

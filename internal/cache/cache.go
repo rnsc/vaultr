@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/rnsc/vaultr/internal/index"
@@ -40,7 +41,7 @@ const MaxAge = 2 * time.Hour
 
 const (
 	magic         = "VLTRC1\n"
-	formatVersion = 1
+	formatVersion = 2 // 2: payload holds the recent paths too; older files are rebuilt
 	cubbyPrefix   = "cubbyhole/vaultr/"
 )
 
@@ -83,7 +84,28 @@ func (h Header) Bound() bool { return h.KeyRef != "" }
 type Store struct {
 	Dir    string
 	Client *vault.Client
+
+	// What was last loaded or saved, to rewrite the file (recent paths)
+	// without crawling again or changing its key and expiry.
+	mu  sync.Mutex
+	cur *state
 }
+
+type state struct {
+	h       Header
+	dek     []byte
+	entries []index.Entry
+	recent  []string
+}
+
+// payload is what is encrypted: the index and the recently opened paths.
+type payload struct {
+	Entries []index.Entry `json:"e"`
+	Recent  []string      `json:"r,omitempty"`
+}
+
+// MaxRecent is how many recent paths are kept.
+const MaxRecent = 10
 
 // File is the cache file path, one per Vault address and namespace.
 func (s *Store) File() string {
@@ -136,22 +158,38 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 		h.KeyRef = ref
 	}
 
-	hdr, err := json.Marshal(h)
-	if err != nil {
+	// A rebuild keeps the recent paths of the index it replaces.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var recent []string
+	if s.cur != nil {
+		recent = s.cur.recent
+	}
+	st := &state{h: h, dek: dek, entries: entries, recent: recent}
+	if err := s.write(st); err != nil {
 		return Header{}, "", err
+	}
+	s.cur = st
+	return h, warning, nil
+}
+
+// write encrypts st into the cache file.
+func (s *Store) write(st *state) error {
+	hdr, err := json.Marshal(st.h)
+	if err != nil {
+		return err
 	}
 	var plain bytes.Buffer
 	zw := gzip.NewWriter(&plain)
-	if err := json.NewEncoder(zw).Encode(entries); err != nil {
-		return Header{}, "", err
+	if err := json.NewEncoder(zw).Encode(payload{Entries: st.entries, Recent: st.recent}); err != nil {
+		return err
 	}
 	if err := zw.Close(); err != nil {
-		return Header{}, "", err
+		return err
 	}
-
-	aead, err := s.aead(h, dek)
+	aead, err := s.aead(st.h, st.dek)
 	if err != nil {
-		return Header{}, "", err
+		return err
 	}
 	nonce := randBytes(aead.NonceSize())
 	aad := append([]byte(magic), hdr...)
@@ -163,10 +201,42 @@ func (s *Store) Save(ctx context.Context, entries []index.Entry, maxAge time.Dur
 	out.Write(hdr)
 	out.Write(nonce)
 	out.Write(ct)
-	if err := writeAtomic(s.File(), out.Bytes()); err != nil {
-		return Header{}, "", err
+	return writeAtomic(s.File(), out.Bytes())
+}
+
+// Recent returns the recently opened paths recorded in the index last
+// loaded or saved, newest first.
+func (s *Store) Recent() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur == nil {
+		return nil
 	}
-	return h, warning, nil
+	return s.cur.recent
+}
+
+// AddRecent records item (a path, or "path#key") as the most recent and
+// rewrites the file with the same key and expiry. It does nothing without
+// a loaded or saved index, or once that has expired.
+func (s *Store) AddRecent(item string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur == nil || !time.Now().Before(s.cur.h.Expires) {
+		return nil
+	}
+	recent := []string{item}
+	for _, r := range s.cur.recent {
+		if r != item && len(recent) < MaxRecent {
+			recent = append(recent, r)
+		}
+	}
+	st := *s.cur
+	st.recent = recent
+	if err := s.write(&st); err != nil {
+		return err
+	}
+	s.cur = &st
+	return nil
 }
 
 // Adopt saves entries, built with an earlier token, under the current one
@@ -268,11 +338,14 @@ func (s *Store) Load(ctx context.Context) ([]index.Entry, Header, error) {
 	if err != nil {
 		return nil, h, err
 	}
-	var entries []index.Entry
-	if err := json.NewDecoder(zr).Decode(&entries); err != nil {
+	var p payload
+	if err := json.NewDecoder(zr).Decode(&p); err != nil {
 		return nil, h, err
 	}
-	return entries, h, nil
+	s.mu.Lock()
+	s.cur = &state{h: h, dek: dek, entries: p.Entries, recent: p.Recent}
+	s.mu.Unlock()
+	return p.Entries, h, nil
 }
 
 // Status returns the header without decrypting (for display only).

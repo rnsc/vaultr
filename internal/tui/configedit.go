@@ -187,7 +187,8 @@ func (m model) viewConfig() string {
 	}
 	b.WriteString("\n")
 
-	footer := 5 // blank, help text (2), status, keys
+	const keys = "↑↓ field · type to edit · ←→/space toggle · ^s save · esc cancel · ^c quit"
+	footer := 4 + helpLines(keys, m.width) // blank, help text (2), status, keys
 	avail := max(1, m.height-strings.Count(b.String(), "\n")-footer)
 	if c.cursor < c.offset {
 		c.offset = c.cursor
@@ -257,7 +258,8 @@ func (m model) viewConfig() string {
 	} else {
 		b.WriteString("\n")
 	}
-	b.WriteString(sSubtle.Render(truncate("↑↓ field · type to edit · ←→/space toggle · ^s save · esc cancel · ^c quit", m.width)))
+	keysText, _ := helpBlock(keys, m.width)
+	b.WriteString(keysText)
 	return b.String()
 }
 

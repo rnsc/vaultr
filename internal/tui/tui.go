@@ -49,6 +49,10 @@ type Backend interface {
 	// AllNamespaces loads (or, with rebuild, crawls) every namespace the
 	// token can use; entries carry their namespace. The string is a warning.
 	AllNamespaces(ctx context.Context, rebuild bool, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error)
+	// Recent lists the recently opened rows ("path" or "path#key"),
+	// newest first; AddRecent records one.
+	Recent() []string
+	AddRecent(item string)
 }
 
 // Options for Run.
@@ -122,6 +126,9 @@ type model struct {
 	results []search.Row
 	cursor  int
 	offset  int
+	// recentN is how many rows at the top of results are recent ones
+	// (shown when the search is empty).
+	recentN int
 
 	progress   index.Progress
 	progressCh chan tea.Msg
@@ -166,6 +173,8 @@ type detailState struct {
 	// secret's versions (KV v2, when the token may read them).
 	version int
 	meta    *vault.SecretMeta
+	// revealSeq identifies the latest reveal, so only its timer hides.
+	revealSeq int
 }
 
 type (
@@ -190,6 +199,7 @@ type (
 		err   error
 	}
 	clipClearMsg struct{ value string }
+	hideMsg      struct{ seq int }
 	flashMsg     struct{ text string }
 )
 
@@ -227,6 +237,10 @@ func (m *model) refresh() {
 		return
 	}
 	m.results = m.ix.Search(m.input.Value(), 0)
+	m.recentN = 0
+	if m.input.Value() == "" && !m.allNS {
+		m.results, m.recentN = withRecent(m.results, m.backend().Recent())
+	}
 	m.cursor, m.offset = 0, 0
 }
 
@@ -361,6 +375,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setFlash(msg.err.Error(), true)
 		}
 		return m, m.copy(msg.label, msg.value)
+	case hideMsg:
+		if m.mode == modeDetail && m.detail.reveal && msg.seq == m.detail.revealSeq {
+			m.detail.reveal = false
+		}
+		return m, nil
 	case clipClearMsg:
 		if cur, err := readClipboard(); err == nil && cur == msg.value {
 			_ = writeClipboard("")
@@ -518,7 +537,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := m.selected(); ok {
 			m.mode = modeDetail
 			m.detail = detailState{row: row, loading: true}
-			return m, m.fetch(row.Entry, 0)
+			return m, tea.Batch(m.fetch(row.Entry, 0), m.addRecent(row))
 		}
 		if m.ix != nil && m.input.Value() != "" {
 			// Nothing matches: maybe it was added after the index was built.
@@ -530,7 +549,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if row.Key == "" {
 				return m, m.setFlash("this row has no key; open it with enter", true)
 			}
-			return m, m.fetchAndCopy(row)
+			return m, tea.Batch(m.fetchAndCopy(row), m.addRecent(row))
 		}
 		return m, nil
 	case "ctrl+o":
@@ -571,6 +590,13 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r", " ":
 		d.reveal = !d.reveal
+		// Hide again after reveal_timeout, so values don't stay on screen
+		// (and in the terminal's memory) in a session left open.
+		if t := m.backend().Settings().RevealTimeout; d.reveal && t > 0 {
+			d.revealSeq++
+			seq := d.revealSeq
+			return m, tea.Tick(t, func(time.Time) tea.Msg { return hideMsg{seq} })
+		}
 	case "enter", "c", "ctrl+y":
 		if len(d.keys) > 0 {
 			k := d.keys[d.cursor]
@@ -583,6 +609,13 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.fetch(d.row.Entry, d.version)
 	case "[", "]":
 		return m, m.stepVersion(msg.String() == "[")
+	case "o":
+		e := d.row.Entry
+		u := m.clientFor(e).UIURL(vault.Mount{Path: e.Mount, KVVersion: e.KV}, e.Rel())
+		if err := openBrowser(u); err != nil {
+			return m, m.setFlash("could not open a browser: "+u, true)
+		}
+		return m, m.setFlash("opened in the browser: "+u, false)
 	}
 	return m, nil
 }
@@ -611,8 +644,11 @@ func (m model) selected() (search.Row, bool) {
 	return m.results[m.cursor], true
 }
 
+// listHelp is the list's help line.
+const listHelp = "↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^n namespace · ^l login · ^e config · esc clear · ^c quit"
+
 func (m model) listHeight() int {
-	h := m.height - 3 // input, status, help
+	h := m.height - 2 - helpLines(listHelp, m.width) // input, status, help
 	if h < 1 {
 		h = 1
 	}
@@ -740,7 +776,12 @@ func (m model) viewList() string {
 	lines := 0
 	for i := m.offset; i < end; i++ {
 		r := m.results[i]
-		line := renderRow(r, terms, m.width-2, m.allNS)
+		var line string
+		if i < m.recentN {
+			line = renderRow(r, terms, m.width-2-len("  recent"), m.allNS) + sSubtle.Render("  recent")
+		} else {
+			line = renderRow(r, terms, m.width-2, m.allNS)
+		}
 		if i == m.cursor {
 			line = sPointer.Render("▌") + sSel.Width(m.width-1).Render(line)
 		} else {
@@ -762,7 +803,8 @@ func (m model) viewList() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^n namespace · ^l login · ^e config · esc clear · ^c quit", m.width)))
+	helpText, _ := helpBlock(listHelp, m.width)
+	b.WriteString(helpText)
 	return b.String()
 }
 
@@ -857,18 +899,37 @@ func (m model) viewDetail() string {
 			lines++
 		}
 	}
-	for ; lines < m.height-2; lines++ {
+	helpText, helpN := helpBlock("↑↓ move · r reveal · c copy value · y copy path"+d.versionHelp()+" · o Vault UI · R reload · esc back", m.width)
+	for ; lines < m.height-1-helpN; lines++ {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · enter/c copy value · y copy path · R reload"+d.versionHelp()+" · esc back", m.width)))
+	b.WriteString(helpText)
 	return b.String()
 }
 
 func renderRow(r search.Row, terms []string, width int, withNS bool) string {
 	e := r.Entry
-	mount := highlight(e.Mount, terms, sSubtle)
-	rest := highlight(e.Rel(), terms, lipgloss.NewStyle())
+	// Too wide: the middle of the path gives way first, so the mount, the
+	// end of the path and the key stay visible.
+	mountText, rel := e.Mount, e.Rel()
+	other := 0 // namespace and key
+	if withNS {
+		other += lipgloss.Width(nsLabel(e.Namespace)) + 3
+	}
+	if r.Key != "" {
+		other += 4 + lipgloss.Width(r.Key)
+	}
+	room := width - other
+	switch {
+	case lipgloss.Width(mountText)+lipgloss.Width(rel) <= room:
+	case room-lipgloss.Width(mountText) >= 6:
+		rel = tail(rel, room-lipgloss.Width(mountText))
+	case room >= 6: // very narrow: the mount gives way too
+		mountText, rel = "", tail(mountText+rel, room)
+	}
+	mount := highlight(mountText, terms, sSubtle)
+	rest := highlight(rel, terms, lipgloss.NewStyle())
 	s := mount + rest
 	if withNS {
 		s = highlight(nsLabel(e.Namespace), terms, sKey) + sSubtle.Render(" · ") + s
