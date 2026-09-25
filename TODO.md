@@ -20,13 +20,27 @@ live.
 
 ## Later
 
+- [ ] **Memory hardening:** less for another process to find in vaultr's
+  memory in a long TUI session. Same-user malware could use the token
+  instead, so this narrows exposure rather than closing a hole.
+  - Linux: `prctl(PR_SET_DUMPABLE, 0)` at startup, so other non-root
+    processes can't read vaultr's memory (`/proc/<pid>/mem`, ptrace)
+    whatever `ptrace_scope` says; also no core dumps.
+  - macOS: `ptrace(PT_DENY_ATTACH)`, so debuggers can't attach (root can
+    still get around it).
+  - An environment variable turns both off, for debugging vaultr itself.
+  - Drop a secret's values when leaving the secret view, and auto-hide
+    revealed values after a few seconds. Go can't wipe strings, so this
+    only narrows what is in memory at any time.
+  - Test on Linux that another process of the same user can't read the
+    memory.
+
 - [ ] **Open in the Vault UI:** a TUI key and `vaultr open PATH` open the
   secret's page in the browser, in the right namespace.
 - [ ] **Profiles for several servers:** `[profile.prod]`, `--profile`, a
   switcher like the namespace one.
 - [ ] **Recent paths:** shown in the TUI when the search is empty, stored
   inside the encrypted index so they expire with it.
-- [ ] **Auto-hide revealed values** after a few seconds in the secret view.
 
 ## Distribution
 
