@@ -376,6 +376,12 @@ func (a *app) Adopt(ctx context.Context, entries []index.Entry, prev cache.Heade
 	return a.store.Adopt(ctx, entries, prev, a.maxAge)
 }
 
+// Recent and AddRecent keep the recently opened rows in the encrypted
+// index (tui.Backend).
+func (a *app) Recent() []string { return a.store.Recent() }
+
+func (a *app) AddRecent(item string) { _ = a.store.AddRecent(item) }
+
 // LoginRequest fills a login request from the configured defaults.
 func LoginRequest(s config.AuthSettings) auth.Request {
 	m, err := auth.ParseMethod(s.Method)

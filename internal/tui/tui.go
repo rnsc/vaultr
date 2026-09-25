@@ -49,6 +49,10 @@ type Backend interface {
 	// AllNamespaces loads (or, with rebuild, crawls) every namespace the
 	// token can use; entries carry their namespace. The string is a warning.
 	AllNamespaces(ctx context.Context, rebuild bool, onProgress func(index.Progress)) ([]index.Entry, cache.Header, string, error)
+	// Recent lists the recently opened rows ("path" or "path#key"),
+	// newest first; AddRecent records one.
+	Recent() []string
+	AddRecent(item string)
 }
 
 // Options for Run.
@@ -122,6 +126,9 @@ type model struct {
 	results []search.Row
 	cursor  int
 	offset  int
+	// recentN is how many rows at the top of results are recent ones
+	// (shown when the search is empty).
+	recentN int
 
 	progress   index.Progress
 	progressCh chan tea.Msg
@@ -230,6 +237,10 @@ func (m *model) refresh() {
 		return
 	}
 	m.results = m.ix.Search(m.input.Value(), 0)
+	m.recentN = 0
+	if m.input.Value() == "" && !m.allNS {
+		m.results, m.recentN = withRecent(m.results, m.backend().Recent())
+	}
 	m.cursor, m.offset = 0, 0
 }
 
@@ -526,7 +537,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := m.selected(); ok {
 			m.mode = modeDetail
 			m.detail = detailState{row: row, loading: true}
-			return m, m.fetch(row.Entry, 0)
+			return m, tea.Batch(m.fetch(row.Entry, 0), m.addRecent(row))
 		}
 		if m.ix != nil && m.input.Value() != "" {
 			// Nothing matches: maybe it was added after the index was built.
@@ -538,7 +549,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if row.Key == "" {
 				return m, m.setFlash("this row has no key; open it with enter", true)
 			}
-			return m, m.fetchAndCopy(row)
+			return m, tea.Batch(m.fetchAndCopy(row), m.addRecent(row))
 		}
 		return m, nil
 	case "ctrl+o":
@@ -763,6 +774,9 @@ func (m model) viewList() string {
 	for i := m.offset; i < end; i++ {
 		r := m.results[i]
 		line := renderRow(r, terms, m.width-2, m.allNS)
+		if i < m.recentN {
+			line = truncate(line+sSubtle.Render("  recent"), m.width-2)
+		}
 		if i == m.cursor {
 			line = sPointer.Render("▌") + sSel.Width(m.width-1).Render(line)
 		} else {

@@ -159,6 +159,13 @@ vaultr get --version 2 secret/prod/db/postgres password
 Vault records when each version was written, not who wrote it (only its
 audit log knows). KV v1 mounts keep no versions.
 
+### Recent secrets
+
+With an empty search, the TUI lists the last 10 secrets you opened or
+copied from first, marked `recent`. They are kept inside the encrypted
+index, so they expire with it (at most 2 hours, or when the token dies)
+and never include values. Each namespace has its own list.
+
 ### Opening a secret in the Vault UI
 
 Press `o` in the secret view, or run `vaultr open PATH` (`--print` just
@@ -417,9 +424,28 @@ one it uses on its own: valid caches are loaded, and the others are built,
 four namespaces at a time sharing the usual number of workers. Namespaces
 with no KV mounts your token can see are skipped.
 
+## Memory
+
+vaultr keeps the token in memory, like the `vault` CLI, and the values of
+a secret while it is open. To keep other programs out of that memory:
+
+- **Linux:** vaultr marks itself non-dumpable. Other processes of your
+  user (only root excepted) can't read its memory or environment, and no
+  core dump is written.
+- **macOS:** debuggers can't attach to it (root can get around this).
+- **Values** leave memory's reach sooner: they are dropped when you leave
+  the secret view, and revealed values are hidden again after
+  `reveal_timeout` (30 seconds by default).
+
+Set `VAULTR_ALLOW_DEBUG=1` to attach a debugger to vaultr. This narrows
+exposure but isn't a wall: malware running as you could use the token
+itself.
+
 ## Cache security
 
-The cache holds secret **paths and key names, never values**. It is written
+The cache holds secret **paths and key names, never values**, plus the
+last 10 rows you opened or copied in the TUI (also just path and key
+name). It is written
 with mode `0600` to `$XDG_CACHE_HOME/vaultr/` (`~/Library/Caches/vaultr` on
 macOS). There is one file per Vault address and namespace.
 
