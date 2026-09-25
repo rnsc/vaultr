@@ -70,7 +70,7 @@ func TestCommandsAndFlags(t *testing.T) {
 	eq(t, run(t, "find", "--v"), []string{"--values"}, "find flags")
 	eq(t, run(t, "find", "--a"), []string{"--all-ns"}, "find --all-ns")
 	eq(t, run(t, "search", "-"), flags["find"], "alias flags")
-	eq(t, run(t, "get", "--"), []string{"--json", "--ns", "--namespace"}, "get flags")
+	eq(t, run(t, "get", "--"), []string{"--json", "--version", "--ns", "--namespace"}, "get flags")
 	eq(t, run(t, "-"), []string{"-r", "--refresh", "--ns", "--namespace"}, "flags before a command")
 	eq(t, run(t, "login", "-method", ""), []string{"oidc", "ldap", "userpass", "token"}, "login methods")
 	eq(t, run(t, "config", ""), []string{"show", "path", "init"}, "config subcommands")
@@ -129,6 +129,15 @@ func TestNamespaces(t *testing.T) {
 	eq(t, run(t, "get", "--ns=team-a", "secret/prod/db/postgres", "p"), []string{"password", "port"}, "keys after --ns=")
 	// Without a source that knows namespaces: nothing.
 	eq(t, Candidates(context.Background(), []Source{IndexSource{Entries: entries}}, []string{"--ns", ""}), nil, "no namespace source")
+}
+
+func TestVersions(t *testing.T) {
+	eq(t, run(t, "vers"), []string{"versions", "version"}, "command (and version)")
+	eq(t, run(t, "versions", "secret/p"), []string{"secret/prod/"}, "path")
+	eq(t, run(t, "versions", "secret/prod/db", ""), nil, "one path only")
+	eq(t, run(t, "get", "--version", ""), nil, "a version number")
+	eq(t, run(t, "get", "--version", "2", "secret/p"), []string{"secret/prod/"}, "path after --version N")
+	eq(t, run(t, "get", "--version", "2", "secret/prod/db/postgres", "p"), []string{"password", "port"}, "keys after --version N")
 }
 
 func TestEnvAndExec(t *testing.T) {

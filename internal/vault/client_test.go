@@ -280,3 +280,57 @@ func TestRetryDelay(t *testing.T) {
 		t.Errorf("bad Retry-After falls back to backoff: %v", d)
 	}
 }
+
+func TestSecretVersions(t *testing.T) {
+	var lastQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/secret/metadata/app/db":
+			_, _ = w.Write([]byte(`{"data":{"current_version":3,"created_time":"2026-01-01T10:00:00Z","updated_time":"2026-01-03T10:00:00Z",
+				"custom_metadata":{"owner":"team-a"},"versions":{
+				"3":{"created_time":"2026-01-03T10:00:00Z","deletion_time":"","destroyed":false},
+				"1":{"created_time":"2026-01-01T10:00:00Z","deletion_time":"","destroyed":true},
+				"2":{"created_time":"2026-01-02T10:00:00Z","deletion_time":"2026-01-02T11:00:00Z","destroyed":false}}}}`))
+		case "/v1/secret/data/app/db":
+			lastQuery = r.URL.RawQuery
+			if r.URL.Query().Get("version") == "2" { // deleted: 404 with metadata, no data
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"data":{"data":null,"metadata":{"version":2}}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"data":{"password":"v` + r.URL.Query().Get("version") + `"}}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(Config{Addr: srv.URL, Token: "t"})
+	kv2 := Mount{Path: "secret/", KVVersion: 2}
+	ctx := context.Background()
+
+	m, err := c.SecretMetadata(ctx, kv2, "app/db")
+	if err != nil || m.Current != 3 || len(m.Versions) != 3 || m.Custom["owner"] != "team-a" {
+		t.Fatalf("metadata %+v %v", m, err)
+	}
+	if m.Versions[0].N != 1 || !m.Versions[0].Destroyed || m.Versions[1].Deleted.IsZero() || !m.Versions[2].Live() {
+		t.Errorf("versions %+v", m.Versions)
+	}
+	if v, ok := m.Version(2); !ok || v.Live() {
+		t.Errorf("version 2: %+v %v", v, ok)
+	}
+
+	data, err := c.ReadSecretVersion(ctx, kv2, "app/db", 3)
+	if err != nil || data["password"] != "v3" || lastQuery != "version=3" {
+		t.Errorf("version 3: %v %v (query %q)", data, err, lastQuery)
+	}
+	if _, err := c.ReadSecretVersion(ctx, kv2, "app/db", 2); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted version: %v", err)
+	}
+	kv1 := Mount{Path: "kv/", KVVersion: 1}
+	if _, err := c.SecretMetadata(ctx, kv1, "x"); !errors.Is(err, ErrNoVersions) {
+		t.Errorf("kv1 metadata: %v", err)
+	}
+	if _, err := c.ReadSecretVersion(ctx, kv1, "x", 1); !errors.Is(err, ErrNoVersions) {
+		t.Errorf("kv1 version: %v", err)
+	}
+}

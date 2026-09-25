@@ -64,7 +64,7 @@ func (m *model) afterLogin() tea.Cmd {
 		case pendingOpen:
 			m.mode = modeDetail
 			m.detail = detailState{row: p.row, loading: true}
-			cmds = append(cmds, m.fetch(p.row.Entry), m.flashWithNotice("", false))
+			cmds = append(cmds, m.fetch(p.row.Entry, 0), m.flashWithNotice("", false))
 		case pendingCopy:
 			m.notice = "" // the copy's own message says what happened
 			cmds = append(cmds, m.fetchAndCopy(p.row))

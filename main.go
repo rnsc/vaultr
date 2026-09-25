@@ -45,6 +45,8 @@ Usage:
                                  the index first; --all-ns searches every
                                  namespace, which becomes the first column)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
+  vaultr versions PATH           list a secret's versions (KV v2); read an
+                                 older one with get --version N
   vaultr env [flags] PATH...     print the secrets' keys as shell exports
                                  (--prefix APP_, --format sh|fish|json)
   vaultr exec PATH... -- CMD     run CMD with the secrets' keys as
@@ -154,7 +156,7 @@ func run(ctx context.Context, args []string) error {
 	if !interactive {
 		switch cmd {
 		case "login":
-		case "find", "search", "f", "get", "g", "env", "exec", "index", "reindex", "refresh":
+		case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh":
 			err = a.ensureToken(ctx)
 		default:
 			err = a.settings.RequireToken()
@@ -170,6 +172,8 @@ func run(ctx context.Context, args []string) error {
 		return a.find(ctx, args[1:])
 	case "get", "g":
 		return a.get(ctx, args[1:])
+	case "versions":
+		return a.versions(ctx, args[1:])
 	case "env":
 		return a.env(ctx, args[1:])
 	case "exec":
@@ -541,7 +545,7 @@ func configCmd(args []string) error {
 
 func isCommand(cmd string) bool {
 	switch cmd {
-	case "find", "search", "f", "get", "g", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
+	case "find", "search", "f", "get", "g", "versions", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
 		return true
 	}
 	return strings.HasPrefix(cmd, "-")
@@ -769,20 +773,28 @@ func (a *app) find(ctx context.Context, args []string) error {
 func (a *app) get(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "output JSON")
+	version := fs.Int("version", 0, "read this version (KV v2; see vaultr versions)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) < 1 || len(pos) > 2 {
-		return errors.New("usage: vaultr get PATH [KEY]")
+		return errors.New("usage: vaultr get [--version N] PATH [KEY]")
 	}
 	path := strings.Trim(pos[0], "/")
-	m, err := a.client.MountFor(ctx, path)
+	m, rel, err := a.mountAndRel(ctx, path)
 	if err != nil {
 		return err
 	}
-	rel := strings.TrimPrefix(strings.TrimPrefix(path, strings.TrimSuffix(m.Path, "/")), "/")
-	data, err := a.client.ReadSecret(ctx, m, rel)
+	var data map[string]any
+	if *version > 0 {
+		data, err = a.client.ReadSecretVersion(ctx, m, rel, *version)
+		if errors.Is(err, vault.ErrNotFound) {
+			err = fmt.Errorf("%s has no readable version %d (deleted, destroyed or never written; see vaultr versions)", path, *version)
+		}
+	} else {
+		data, err = a.client.ReadSecret(ctx, m, rel)
+	}
 	if err != nil {
 		return err
 	}

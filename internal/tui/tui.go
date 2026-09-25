@@ -162,6 +162,10 @@ type detailState struct {
 	reveal  bool
 	loading bool
 	err     error
+	// version is the version shown, 0 for the current one; meta is the
+	// secret's versions (KV v2, when the token may read them).
+	version int
+	meta    *vault.SecretMeta
 }
 
 type (
@@ -173,9 +177,11 @@ type (
 		err     error
 	}
 	secretMsg struct {
-		path   string
-		values map[string]string
-		err    error
+		path    string
+		version int
+		meta    *vault.SecretMeta
+		values  map[string]string
+		err     error
 	}
 	copyValueMsg struct {
 		row   search.Row
@@ -325,8 +331,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 	case secretMsg:
-		if m.mode != modeDetail || msg.path != m.detail.row.Entry.Path {
+		if m.mode != modeDetail || msg.path != m.detail.row.Entry.Path || msg.version != m.detail.version {
 			return m, nil
+		}
+		if msg.meta != nil {
+			m.detail.meta = msg.meta
 		}
 		if errors.Is(msg.err, vault.ErrTokenInvalid) {
 			return m, m.loginToResume(pendingAction{kind: pendingOpen, row: m.detail.row})
@@ -509,7 +518,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := m.selected(); ok {
 			m.mode = modeDetail
 			m.detail = detailState{row: row, loading: true}
-			return m, m.fetch(row.Entry)
+			return m, m.fetch(row.Entry, 0)
 		}
 		if m.ix != nil && m.input.Value() != "" {
 			// Nothing matches: maybe it was added after the index was built.
@@ -571,7 +580,9 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.copy("path", d.row.Entry.Path)
 	case "R":
 		d.loading = true
-		return m, m.fetch(d.row.Entry)
+		return m, m.fetch(d.row.Entry, d.version)
+	case "[", "]":
+		return m, m.stepVersion(msg.String() == "[")
 	}
 	return m, nil
 }
@@ -617,7 +628,10 @@ func (m model) clientFor(e *index.Entry) *vault.Client {
 	return c
 }
 
-func (m model) fetch(e *index.Entry) tea.Cmd {
+// fetch reads a secret (version 0: the current one) and, for KV v2, its
+// versions; a token that may read the data but not the metadata just
+// doesn't see the versions.
+func (m model) fetch(e *index.Entry, version int) tea.Cmd {
 	c := m.clientFor(e)
 	path := e.Path
 	mount := vault.Mount{Path: e.Mount, KVVersion: e.KV}
@@ -625,8 +639,20 @@ func (m model) fetch(e *index.Entry) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		data, err := c.ReadSecret(ctx, mount, rel)
-		return secretMsg{path: path, values: vault.Stringify(data), err: tokenDead(ctx, c, err)}
+		var data map[string]any
+		var err error
+		if version > 0 {
+			data, err = c.ReadSecretVersion(ctx, mount, rel, version)
+		} else {
+			data, err = c.ReadSecret(ctx, mount, rel)
+		}
+		msg := secretMsg{path: path, version: version, values: vault.Stringify(data), err: tokenDead(ctx, c, err)}
+		if mount.KVVersion == 2 {
+			if meta, merr := c.SecretMetadata(ctx, mount, rel); merr == nil {
+				msg.meta = &meta
+			}
+		}
+		return msg
 	}
 }
 
@@ -787,8 +813,17 @@ func (m model) viewDetail() string {
 	if m.allNS {
 		title = sSubtle.Render(nsLabel(d.row.Entry.Namespace)+" · ") + title
 	}
-	b.WriteString(title + "\n\n")
+	b.WriteString(title + "\n")
 	lines := 2
+	if vl, warn := d.versionLine(); vl != "" {
+		st := sSubtle
+		if warn {
+			st = sWarn
+		}
+		b.WriteString(st.Render(truncate(vl, m.width)) + "\n")
+		lines++
+	}
+	b.WriteString("\n")
 	switch {
 	case d.loading:
 		b.WriteString(sSubtle.Render(" loading…") + "\n")
@@ -826,7 +861,7 @@ func (m model) viewDetail() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · enter/c copy value · y copy path · R reload · esc back", m.width)))
+	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · enter/c copy value · y copy path · R reload"+d.versionHelp()+" · esc back", m.width)))
 	return b.String()
 }
 
