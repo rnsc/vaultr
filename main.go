@@ -86,10 +86,15 @@ Settings:
   VAULTR_PATHS_ONLY  "1" to index paths without reading key names
   VAULTR_CLIP_CLEAR  clear copied values from the clipboard after this
                      long in the TUI (default 45s, 0 disables)
+  VAULTR_REVEAL_TIMEOUT hide revealed values in the TUI again after
+                     this long (default 30s, 0 keeps them shown)
   VAULTR_CACHE_DIR   where the encrypted index lives
+  VAULTR_ALLOW_DEBUG "1" lets debuggers attach to vaultr (it normally
+                     blocks that, and memory reads by other processes)
 `
 
 func main() {
+	harden()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	err := run(ctx, os.Args[1:])

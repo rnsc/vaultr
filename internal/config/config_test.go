@@ -12,7 +12,7 @@ import (
 var allEnv = []string{
 	"VAULT_ADDR", "VAULT_URL", "VAULT_TOKEN", "VAULT_NAMESPACE", "VAULT_CACERT",
 	"VAULT_CLIENT_CERT", "VAULT_CLIENT_KEY", "VAULT_SKIP_VERIFY",
-	"VAULTR_CONFIG", "VAULTR_MOUNTS", "VAULTR_WORKERS", "VAULTR_MAX_AGE",
+	"VAULTR_CONFIG", "VAULTR_MOUNTS", "VAULTR_WORKERS", "VAULTR_MAX_AGE", "VAULTR_REVEAL_TIMEOUT",
 	"VAULTR_PATHS_ONLY", "VAULTR_CLIP_CLEAR", "VAULTR_CACHE_DIR", "XDG_CONFIG_HOME",
 }
 
@@ -54,7 +54,7 @@ func TestDefaults(t *testing.T) {
 	if s.Found || s.Vault.Addr != "https://127.0.0.1:8200" || s.Vault.Namespace != "" || s.Vault.Token != "" {
 		t.Errorf("defaults: %+v", s)
 	}
-	if s.Workers != 32 || s.MaxAge != MaxAge || s.ClipClear != 45*time.Second || s.PathsOnly || s.Mounts != nil {
+	if s.Workers != 32 || s.MaxAge != MaxAge || s.ClipClear != 45*time.Second || s.RevealTimeout != 30*time.Second || s.PathsOnly || s.Mounts != nil {
 		t.Errorf("defaults: %+v", s)
 	}
 	if !strings.HasSuffix(s.CacheDir, "vaultr") {
@@ -225,5 +225,20 @@ func TestDescribe(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("Describe missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestRevealTimeout(t *testing.T) {
+	isolate(t, nil, "reveal_timeout = \"10s\"\n")
+	if s := load(t); s.RevealTimeout != 10*time.Second || s.Source["reveal_timeout"] != "config" {
+		t.Errorf("from file: %v (%s)", s.RevealTimeout, s.Source["reveal_timeout"])
+	}
+	isolate(t, map[string]string{"VAULTR_REVEAL_TIMEOUT": "0"}, "reveal_timeout = \"10s\"\n")
+	if s := load(t); s.RevealTimeout != 0 {
+		t.Errorf("env 0: %v", s.RevealTimeout)
+	}
+	isolate(t, map[string]string{"VAULTR_REVEAL_TIMEOUT": "soon"}, "")
+	if _, err := Load(); err == nil {
+		t.Error("bad duration accepted")
 	}
 }

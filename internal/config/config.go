@@ -35,6 +35,7 @@ type File struct {
 	MaxAge         string   `toml:"max_age"`
 	PathsOnly      bool     `toml:"paths_only"`
 	ClipClear      string   `toml:"clip_clear"`
+	RevealTimeout  string   `toml:"reveal_timeout"`
 	CacheDir       string   `toml:"cache_dir"`
 	Auth           Auth     `toml:"auth"`
 }
@@ -73,8 +74,11 @@ type Settings struct {
 	MaxAge    time.Duration
 	PathsOnly bool
 	ClipClear time.Duration
-	CacheDir  string
-	Auth      AuthSettings
+	// RevealTimeout hides revealed values in the TUI again after this
+	// long (0 never).
+	RevealTimeout time.Duration
+	CacheDir      string
+	Auth          AuthSettings
 
 	Path      string            // config file path consulted
 	Found     bool              // whether it exists
@@ -132,11 +136,12 @@ func ReadFile(path string) (File, bool, error) {
 // Settings.RequireToken.
 func Load() (*Settings, error) {
 	s := &Settings{
-		Path:      DefaultPath(),
-		Source:    map[string]string{},
-		Workers:   32,
-		MaxAge:    MaxAge,
-		ClipClear: 45 * time.Second,
+		Path:          DefaultPath(),
+		Source:        map[string]string{},
+		Workers:       32,
+		MaxAge:        MaxAge,
+		ClipClear:     45 * time.Second,
+		RevealTimeout: 30 * time.Second,
 	}
 	f, found, err := ReadFile(s.Path)
 	if err != nil {
@@ -257,6 +262,9 @@ func Load() (*Settings, error) {
 	if err := dur("clip_clear", "VAULTR_CLIP_CLEAR", f.ClipClear, &s.ClipClear); err != nil {
 		return nil, err
 	}
+	if err := dur("reveal_timeout", "VAULTR_REVEAL_TIMEOUT", f.RevealTimeout, &s.RevealTimeout); err != nil {
+		return nil, err
+	}
 
 	// Booleans.
 	s.PathsOnly, s.Source["paths_only"] = f.PathsOnly, "config"
@@ -340,6 +348,7 @@ func (s *Settings) Describe() string {
 		{"max_age", s.MaxAge.String()},
 		{"paths_only", strconv.FormatBool(s.PathsOnly)},
 		{"clip_clear", s.ClipClear.String()},
+		{"reveal_timeout", s.RevealTimeout.String()},
 		{"cache_dir", s.CacheDir},
 	}
 	for _, r := range rows {

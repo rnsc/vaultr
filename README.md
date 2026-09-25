@@ -241,6 +241,7 @@ default.
 | `max_age`    | `VAULTR_MAX_AGE`    | `2h`           | Cache lifetime. Values above 2h are capped at 2h          |
 | `paths_only` | `VAULTR_PATHS_ONLY` | `false`        | Index paths only. Faster, and needs no `read` permission, but you can't search key names |
 | `clip_clear` | `VAULTR_CLIP_CLEAR` | `45s`          | Clipboard auto-clear delay in the TUI (`0` disables)      |
+| `reveal_timeout` | `VAULTR_REVEAL_TIMEOUT` | `30s`  | Hide values revealed in the TUI again after this long (`0` keeps them shown) |
 | `cache_dir`  | `VAULTR_CACHE_DIR`  | user cache dir | Where the encrypted index lives                           |
 
 Mounts are discovered through `sys/internal/ui/mounts`, which any token can

@@ -166,6 +166,8 @@ type detailState struct {
 	// secret's versions (KV v2, when the token may read them).
 	version int
 	meta    *vault.SecretMeta
+	// revealSeq identifies the latest reveal, so only its timer hides.
+	revealSeq int
 }
 
 type (
@@ -190,6 +192,7 @@ type (
 		err   error
 	}
 	clipClearMsg struct{ value string }
+	hideMsg      struct{ seq int }
 	flashMsg     struct{ text string }
 )
 
@@ -361,6 +364,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setFlash(msg.err.Error(), true)
 		}
 		return m, m.copy(msg.label, msg.value)
+	case hideMsg:
+		if m.mode == modeDetail && m.detail.reveal && msg.seq == m.detail.revealSeq {
+			m.detail.reveal = false
+		}
+		return m, nil
 	case clipClearMsg:
 		if cur, err := readClipboard(); err == nil && cur == msg.value {
 			_ = writeClipboard("")
@@ -571,6 +579,13 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r", " ":
 		d.reveal = !d.reveal
+		// Hide again after reveal_timeout, so values don't stay on screen
+		// (and in the terminal's memory) in a session left open.
+		if t := m.backend().Settings().RevealTimeout; d.reveal && t > 0 {
+			d.revealSeq++
+			seq := d.revealSeq
+			return m, tea.Tick(t, func(time.Time) tea.Msg { return hideMsg{seq} })
+		}
 	case "enter", "c", "ctrl+y":
 		if len(d.keys) > 0 {
 			k := d.keys[d.cursor]

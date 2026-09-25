@@ -207,7 +207,8 @@ func TestConfigEditorCreatesFile(t *testing.T) {
 	// Reopening shows the saved values, no longer a new file.
 	m = press(t, m, "ctrl+e")
 	view := plain(m.View())
-	if strings.Contains(view, "(new file)") || !strings.Contains(view, "https://vault.example.com") || !strings.Contains(view, "[ldap]") {
+	// (auth.method is further down than a 20-line screen shows.)
+	if strings.Contains(view, "(new file)") || !strings.Contains(view, "https://vault.example.com") || m.cfg.values["auth.method"] != "ldap" {
 		t.Errorf("reopened editor:\n%s", view)
 	}
 }
