@@ -48,6 +48,7 @@ type Auth struct {
 	Namespace    *string `toml:"namespace"`
 	CallbackPort int     `toml:"callback_port"`
 	SaveToken    *bool   `toml:"save_token"`
+	AutoLogin    bool    `toml:"auto_login"`
 }
 
 // AuthSettings are the resolved login defaults.
@@ -59,6 +60,9 @@ type AuthSettings struct {
 	Namespace    string // where to log in; "" = root
 	CallbackPort int
 	SaveToken    bool
+	// AutoLogin starts a login by itself when the token is missing or
+	// dead, instead of waiting for the user to ask.
+	AutoLogin bool
 }
 
 // Settings are the resolved values.
@@ -279,7 +283,7 @@ func Load() (*Settings, error) {
 
 	// Login defaults.
 	a := f.Auth
-	s.Auth = AuthSettings{Method: a.Method, Mount: a.Mount, Role: a.Role, Username: a.Username, CallbackPort: a.CallbackPort, SaveToken: true}
+	s.Auth = AuthSettings{Method: a.Method, Mount: a.Mount, Role: a.Role, Username: a.Username, CallbackPort: a.CallbackPort, SaveToken: true, AutoLogin: a.AutoLogin}
 	switch {
 	case a.Namespace != nil:
 		s.Auth.Namespace = strings.Trim(*a.Namespace, "/")

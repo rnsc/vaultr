@@ -30,6 +30,7 @@ func TestRoundTrip(t *testing.T) {
 		"paths_only": "true", "clip_clear": "0", "cache_dir": "/tmp/c",
 		"auth.method": "LDAP", "auth.mount": "/corp-ldap/", "auth.username": "jdoe",
 		"auth.namespace": "/", "auth.callback_port": "8300", "auth.save_token": "false",
+		"auth.auto_login": "true",
 	}
 	f, err := FromValues(in)
 	if err != nil {
@@ -53,6 +54,7 @@ func TestRoundTrip(t *testing.T) {
 	want := map[string]string{
 		"namespace": "team-a", "token_namespace": "/", "mounts": "secret, kv-team",
 		"auth.method": "ldap", "auth.mount": "corp-ldap", "auth.namespace": "/", "auth.save_token": "false",
+		"auth.auto_login": "true",
 	}
 	for k, v := range want {
 		if got := back.Values()[k]; got != v {
@@ -67,7 +69,7 @@ func TestRoundTrip(t *testing.T) {
 	if s.Vault.Namespace != "team-a" || s.Vault.TokenNamespace == nil || *s.Vault.TokenNamespace != "" {
 		t.Errorf("vault settings %+v", s.Vault)
 	}
-	if s.Auth != (AuthSettings{Method: "ldap", Mount: "corp-ldap", Username: "jdoe", Namespace: "", CallbackPort: 8300, SaveToken: false}) {
+	if s.Auth != (AuthSettings{Method: "ldap", Mount: "corp-ldap", Username: "jdoe", Namespace: "", CallbackPort: 8300, SaveToken: false, AutoLogin: true}) {
 		t.Errorf("auth settings %+v", s.Auth)
 	}
 }

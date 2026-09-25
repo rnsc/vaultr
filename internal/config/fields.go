@@ -63,6 +63,7 @@ var Fields = []Field{
 	{Key: "auth.namespace", Help: `Namespace to log in to. Defaults to token_namespace, else the root namespace ("/").`, Example: `"/"`},
 	{Key: "auth.callback_port", Kind: KindInt, Help: "Local port for the OIDC browser callback.", Example: "8250"},
 	{Key: "auth.save_token", Kind: KindBool, Help: "Save the token to ~/.vault-token after logging in, like `vault login`.", Example: "true", Default: "true"},
+	{Key: "auth.auto_login", Kind: KindBool, Help: "Log in by yourself when the token is missing or expired: OIDC opens the browser, other methods ask only for the password. The CLI does it only in a terminal.", Example: "false", Default: "false"},
 }
 
 // FieldByKey finds a field.
@@ -119,6 +120,7 @@ func (f File) Values() map[string]string {
 		"auth.namespace":     optStr(f.Auth.Namespace),
 		"auth.callback_port": intStr(f.Auth.CallbackPort),
 		"auth.save_token":    save,
+		"auth.auto_login":    strconv.FormatBool(f.Auth.AutoLogin),
 	}
 }
 
@@ -183,6 +185,7 @@ func FromValues(v map[string]string) (File, error) {
 			f.Mounts = append(f.Mounts, m)
 		}
 	}
+	f.Auth.AutoLogin = boolean("auth.auto_login")
 	if !boolean("auth.save_token") {
 		no := false
 		f.Auth.SaveToken = &no
@@ -269,6 +272,8 @@ func tomlValue(fd Field, f File) string {
 		v = f.Auth.CallbackPort
 	case "auth.save_token":
 		v = f.Auth.SaveToken == nil || *f.Auth.SaveToken
+	case "auth.auto_login":
+		v = f.Auth.AutoLogin
 	default:
 		v = f.Values()[fd.Key]
 	}
