@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -173,31 +175,49 @@ func (c *Client) send(ctx context.Context, withToken bool, ns, method, path stri
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	var rdr io.Reader
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		rdr = bytes.NewReader(b)
+		payload = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
-	if err != nil {
-		return nil, err
-	}
-	if withToken {
-		req.Header.Set("X-Vault-Token", c.Token())
-	}
-	req.Header.Set("X-Vault-Request", "true")
-	if ns != "" {
-		req.Header.Set("X-Vault-Namespace", ns)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, u, rdr)
+		if err != nil {
+			return nil, err
+		}
+		if withToken {
+			req.Header.Set("X-Vault-Token", c.Token())
+		}
+		req.Header.Set("X-Vault-Request", "true")
+		if ns != "" {
+			req.Header.Set("X-Vault-Namespace", ns)
+		}
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+			break
+		}
+		// Over a rate limit quota: wait and try again, so a busy server
+		// slows things down instead of leaving holes in the index.
+		wait := retryDelay(attempt, resp.Header.Get("Retry-After"))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if err := sleep(ctx, wait); err != nil {
+			return nil, err
+		}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
@@ -222,6 +242,34 @@ func (c *Client) send(ctx context.Context, withToken bool, ns, method, path stri
 		return out, fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.Join(out.Errors, "; "))
 	}
 	return out, nil
+}
+
+// maxRetries bounds retries of a rate-limited (HTTP 429) request.
+const maxRetries = 6
+
+// retryDelay is how long to wait before retry number attempt+1: the
+// server's Retry-After (seconds) when given, else an exponential backoff
+// from 250ms, with jitter so parallel workers don't retry in lockstep.
+// Both are capped at 10s.
+func retryDelay(attempt int, retryAfter string) time.Duration {
+	const maxWait = 10 * time.Second
+	if secs, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && secs >= 0 {
+		return min(time.Duration(secs)*time.Second, maxWait)
+	}
+	d := min(250*time.Millisecond<<attempt, maxWait)
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+}
+
+// sleep waits for d or until ctx is done; tests replace it.
+var sleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // escapePath escapes each segment so names containing '#', '?', '%' or

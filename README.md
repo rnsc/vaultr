@@ -236,6 +236,12 @@ Paths the token can't list or read are skipped and counted as "denied".
 Paths that can be listed but not read are still indexed, just without key
 names.
 
+If the server has a rate limit quota (Vault Enterprise, and also Vault CE
+and OpenBao), a burst of index requests can get `HTTP 429` answers. vaultr
+waits and retries them, following the server's `Retry-After` when given,
+so a busy server makes indexing slower rather than incomplete. If it's
+still too slow, lower `workers`.
+
 ### Logging in
 
 `vaultr login` and the TUI's login screen (`^l`, or opened automatically
