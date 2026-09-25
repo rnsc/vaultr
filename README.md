@@ -144,6 +144,21 @@ vaultr exec secret/prod/db/postgres secret/prod/payments/stripe -- ./run.sh
   environment plus the secrets. vaultr exits with the command's exit
   status.
 
+### Versions (KV v2)
+
+The secret view shows which version you're looking at and when it was
+written, for example `version 3 of 3 (current) · written 2h ago`. `[` and
+`]` step to older and newer versions; reveal and copy work on the version
+shown. Deleted and destroyed versions are marked as such.
+
+```sh
+vaultr versions secret/prod/db/postgres           # VERSION, CREATED, STATE (current, deleted, destroyed)
+vaultr get --version 2 secret/prod/db/postgres password
+```
+
+Vault records when each version was written, not who wrote it (only its
+audit log knows). KV v1 mounts keep no versions.
+
 ### Finding secrets added recently
 
 The index is a snapshot, rebuilt at most every 2 hours. If a secret was
@@ -171,7 +186,7 @@ thousand secrets.
 | `^o`                | copy the path                     | `R`             | reload        |
 | `^r`                | refresh the index                 | `esc`           | back          |
 | `^l`                | log in (again)                    | `^c`            | quit          |
-| `^e`                | edit the config file              |                 |               |
+| `^e`                | edit the config file              | `[` / `]`       | older / newer version (KV v2) |
 | `^n`                | switch namespace ([more](#switching-namespaces)) |  |               |
 | `esc`               | clear the search (never quits)    |                 |               |
 | `^c`                | clear the search, or quit if it's empty |           |               |

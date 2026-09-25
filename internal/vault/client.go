@@ -418,6 +418,101 @@ func (c *Client) ReadSecret(ctx context.Context, m Mount, rel string) (map[strin
 	return d, nil
 }
 
+// ErrNoVersions means the mount keeps no versions (KV v1).
+var ErrNoVersions = errors.New("KV v1 mounts keep no versions")
+
+// Version is one version of a KV v2 secret.
+type Version struct {
+	N         int
+	Created   time.Time
+	Deleted   time.Time // zero unless deleted (recoverable)
+	Destroyed bool      // permanently removed
+}
+
+// Live reports whether the version's data can still be read.
+func (v Version) Live() bool { return v.Deleted.IsZero() && !v.Destroyed }
+
+// SecretMeta is a KV v2 secret's metadata. Vault doesn't record who wrote
+// a version, only when.
+type SecretMeta struct {
+	Current  int
+	Created  time.Time
+	Updated  time.Time
+	Versions []Version // oldest first
+	Custom   map[string]string
+}
+
+// Version returns version n, if kept.
+func (m SecretMeta) Version(n int) (Version, bool) {
+	for _, v := range m.Versions {
+		if v.N == n {
+			return v, true
+		}
+	}
+	return Version{}, false
+}
+
+// SecretMetadata reads a KV v2 secret's versions and times.
+func (c *Client) SecretMetadata(ctx context.Context, m Mount, rel string) (SecretMeta, error) {
+	if m.KVVersion != 2 {
+		return SecretMeta{}, ErrNoVersions
+	}
+	resp, err := c.Read(ctx, m.Path+"metadata/"+rel)
+	if err != nil {
+		return SecretMeta{}, err
+	}
+	var d struct {
+		Current  int               `json:"current_version"`
+		Created  time.Time         `json:"created_time"`
+		Updated  time.Time         `json:"updated_time"`
+		Custom   map[string]string `json:"custom_metadata"`
+		Versions map[string]struct {
+			Created   time.Time `json:"created_time"`
+			Deletion  string    `json:"deletion_time"`
+			Destroyed bool      `json:"destroyed"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(resp.Data, &d); err != nil {
+		return SecretMeta{}, fmt.Errorf("metadata %s: %w", rel, err)
+	}
+	meta := SecretMeta{Current: d.Current, Created: d.Created, Updated: d.Updated, Custom: d.Custom}
+	for k, v := range d.Versions {
+		n, err := strconv.Atoi(k)
+		if err != nil {
+			continue
+		}
+		ver := Version{N: n, Created: v.Created, Destroyed: v.Destroyed}
+		if v.Deletion != "" {
+			ver.Deleted, _ = time.Parse(time.RFC3339Nano, v.Deletion)
+		}
+		meta.Versions = append(meta.Versions, ver)
+	}
+	sort.Slice(meta.Versions, func(i, j int) bool { return meta.Versions[i].N < meta.Versions[j].N })
+	return meta, nil
+}
+
+// ReadSecretVersion reads version n of a KV v2 secret. A deleted or
+// destroyed version is ErrNotFound.
+func (c *Client) ReadSecretVersion(ctx context.Context, m Mount, rel string, n int) (map[string]any, error) {
+	if m.KVVersion != 2 {
+		return nil, ErrNoVersions
+	}
+	resp, err := c.do(ctx, http.MethodGet, m.Path+"data/"+rel, url.Values{"version": {strconv.Itoa(n)}}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var d struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Data, &d); err != nil {
+		return nil, err
+	}
+	if d.Data == nil {
+		return nil, fmt.Errorf("%s version %d: %w", rel, n, ErrNotFound)
+	}
+	return d.Data, nil
+}
+
 // ListSecrets lists children of a KV folder. rel is relative to the mount
 // and is either empty or ends with "/".
 func (c *Client) ListSecrets(ctx context.Context, m Mount, rel string) ([]string, error) {
