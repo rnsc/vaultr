@@ -10,18 +10,12 @@ live.
 - [x] Auto-login (`auth.auto_login`), resume after login, keeping the index
   after a re-login by the same identity, token expiry countdown (v0.6.0).
 - [x] `vaultr env` / `vaultr exec` (v0.7.0).
+- [x] Search across all namespaces, retry on HTTP 429 (v0.8.x).
 
 ## Next
 
-- [ ] **Search across all namespaces** (branch `all-namespaces`): `find --all-ns`, a TUI toggle;
-  results tagged with their namespace, opening one switches there. Merge
-  the per-namespace caches, build the missing ones in parallel.
-- [ ] **Versions and metadata** (KV v2) in the secret view: who changed it,
+- [ ] **Versions and metadata** (branch `secret-versions`) (KV v2) in the secret view: who changed it,
   when, how many versions; view an older version.
-- [ ] **Retry with backoff on HTTP 429** (branch `retry-rate-limit`) (Vault Enterprise rate limit
-  quotas), honouring `Retry-After`, so a busy server slows indexing down
-  instead of leaving folders out.
-
 ## Later
 
 - [ ] **Open in the Vault UI:** a TUI key and `vaultr open PATH` open the
