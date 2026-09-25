@@ -5,6 +5,7 @@ package complete
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -28,13 +29,15 @@ type NamespaceSource interface {
 
 // Commands and their flags, for completing the first word and options.
 var (
-	Commands = []string{"find", "get", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
+	Commands = []string{"find", "get", "env", "exec", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
 
 	// Every command but login takes --ns/--namespace, before or after it.
 	flags = map[string][]string{
 		"":       {"-r", "--refresh", "--ns", "--namespace"}, // before any command
 		"find":   {"--json", "--values", "-n", "-r", "--refresh", "--ns", "--namespace"},
 		"get":    {"--json", "--ns", "--namespace"},
+		"env":    {"--prefix", "--format", "--ns", "--namespace"},
+		"exec":   {"--prefix", "--ns", "--namespace"},
 		"index":  {"--ns", "--namespace"},
 		"status": {"--ns", "--namespace"},
 		"purge":  {"--ns", "--namespace"},
@@ -72,6 +75,9 @@ func Candidates(ctx context.Context, sources []Source, args []string) []string {
 	if a, ok := aliases[cmd]; ok {
 		cmd = a
 	}
+	if cmd == "exec" && slices.Contains(prev, "--") {
+		return nil // the command's own arguments
+	}
 	if strings.HasPrefix(cur, "-") {
 		return filter(flags[cmd], cur)
 	}
@@ -88,6 +94,18 @@ func Candidates(ctx context.Context, sources []Source, args []string) []string {
 				return filter(keys, cur)
 			})
 		}
+	case "env", "exec":
+		// Every argument is a secret path, up to exec's "--" (the command).
+		if slices.Contains(prev, "--") {
+			return nil
+		}
+		switch strings.TrimLeft(prev[len(prev)-1], "-") {
+		case "format":
+			return filter([]string{"sh", "fish", "json"}, cur)
+		case "prefix":
+			return nil
+		}
+		return firstMatch(sources, func(src Source) []string { return paths(ctx, src, cur) })
 	case "login":
 		if last := prev[len(prev)-1]; last == "-method" || last == "--method" {
 			return filter([]string{"oidc", "ldap", "userpass", "token"}, cur)

@@ -123,6 +123,27 @@ Another shell? See [Contributing](#contributing).
 Matching is case-insensitive. Exact key names rank first, then key prefixes,
 then the last path segment.
 
+### Secrets as environment variables
+
+`vaultr env` prints a secret's keys as shell exports, and `vaultr exec`
+runs a command with them in its environment. Values are read live and
+never written to disk.
+
+```sh
+eval "$(vaultr env secret/prod/db/postgres)"      # PASSWORD, USERNAME, ... in this shell
+vaultr env --prefix DB_ secret/prod/db/postgres   # DB_PASSWORD, DB_USERNAME, ...
+vaultr env --format fish secret/app | source      # fish; --format json for tools
+vaultr exec secret/prod/db/postgres secret/prod/payments/stripe -- ./run.sh
+```
+
+- **Names:** key names become upper case, with anything but letters,
+  digits and `_` turned into `_` (`api-key` becomes `API_KEY`).
+- **Several paths:** when two secrets have the same key, the later path
+  wins, and vaultr warns about it.
+- **`exec`:** everything after `--` is the command, run with your
+  environment plus the secrets. vaultr exits with the command's exit
+  status.
+
 ### Finding secrets added recently
 
 The index is a snapshot, rebuilt at most every 2 hours. If a secret was

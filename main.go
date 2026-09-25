@@ -44,6 +44,10 @@ Usage:
   vaultr find [flags] QUERY...   print matching path/key pairs (-r refreshes
                                  the index first)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
+  vaultr env [flags] PATH...     print the secrets' keys as shell exports
+                                 (--prefix APP_, --format sh|fish|json)
+  vaultr exec PATH... -- CMD     run CMD with the secrets' keys as
+                                 environment variables
   vaultr index                   refresh the local index now (also: refresh)
   vaultr status                  show cache state
   vaultr purge                   delete the local index and its key
@@ -89,6 +93,10 @@ func main() {
 	stop()
 	if errors.Is(err, errNoMatch) {
 		os.Exit(1)
+	}
+	var ee exitError
+	if errors.As(err, &ee) {
+		os.Exit(ee.code) // vaultr exec: the command's own status
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "vaultr:", err)
@@ -145,7 +153,7 @@ func run(ctx context.Context, args []string) error {
 	if !interactive {
 		switch cmd {
 		case "login":
-		case "find", "search", "f", "get", "g", "index", "reindex", "refresh":
+		case "find", "search", "f", "get", "g", "env", "exec", "index", "reindex", "refresh":
 			err = a.ensureToken(ctx)
 		default:
 			err = a.settings.RequireToken()
@@ -161,6 +169,10 @@ func run(ctx context.Context, args []string) error {
 		return a.find(ctx, args[1:])
 	case "get", "g":
 		return a.get(ctx, args[1:])
+	case "env":
+		return a.env(ctx, args[1:])
+	case "exec":
+		return a.exec(ctx, args[1:])
 	case "index", "reindex", "refresh":
 		_, _, err := a.build(ctx, true)
 		return err
@@ -528,7 +540,7 @@ func configCmd(args []string) error {
 
 func isCommand(cmd string) bool {
 	switch cmd {
-	case "find", "search", "f", "get", "g", "index", "reindex", "refresh", "status", "purge", "login":
+	case "find", "search", "f", "get", "g", "env", "exec", "index", "reindex", "refresh", "status", "purge", "login":
 		return true
 	}
 	return strings.HasPrefix(cmd, "-")
