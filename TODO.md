@@ -15,7 +15,7 @@ live.
 
 ## Later
 
-- [ ] **Memory hardening:** less for another process to find in vaultr's
+- [ ] **Memory hardening** (branch `hardening-open-recent`): less for another process to find in vaultr's
   memory in a long TUI session. Same-user malware could use the token
   instead, so this narrows exposure rather than closing a hole.
   - Linux: `prctl(PR_SET_DUMPABLE, 0)` at startup, so other non-root
@@ -29,11 +29,11 @@ live.
     only narrows what is in memory at any time.
   - Test on Linux that another process of the same user can't read the
     memory.
-- [ ] **Open in the Vault UI:** a TUI key and `vaultr open PATH` open the
+- [ ] **Open in the Vault UI** (branch `hardening-open-recent`): a TUI key and `vaultr open PATH` open the
   secret's page in the browser, in the right namespace.
 - [ ] **Profiles for several servers:** `[profile.prod]`, `--profile`, a
   switcher like the namespace one.
-- [ ] **Recent paths:** shown in the TUI when the search is empty, stored
+- [ ] **Recent paths** (branch `hardening-open-recent`): shown in the TUI when the search is empty, stored
   inside the encrypted index so they expire with it.
 
 ## Distribution
