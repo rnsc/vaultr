@@ -68,6 +68,7 @@ func TestCommandsAndFlags(t *testing.T) {
 	eq(t, run(t, "f"), []string{"find"}, "f")
 	eq(t, run(t, "co"), []string{"config", "completion"}, "co")
 	eq(t, run(t, "find", "--v"), []string{"--values"}, "find flags")
+	eq(t, run(t, "find", "--a"), []string{"--all-ns"}, "find --all-ns")
 	eq(t, run(t, "search", "-"), flags["find"], "alias flags")
 	eq(t, run(t, "get", "--"), []string{"--json", "--ns", "--namespace"}, "get flags")
 	eq(t, run(t, "-"), []string{"-r", "--refresh", "--ns", "--namespace"}, "flags before a command")

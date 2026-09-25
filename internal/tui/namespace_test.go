@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,11 +29,12 @@ func TestNamespaceSwitcherFiltersAndSwitches(t *testing.T) {
 	if m.mode != modeNamespace || m.ns.loading {
 		t.Fatalf("mode %v loading %v", m.mode, m.ns.loading)
 	}
-	if !reflect.DeepEqual(m.ns.results, []string{"", "team-a", "team-a/child", "team-b"}) {
+	// "all namespaces" comes first.
+	if !reflect.DeepEqual(m.ns.results, []string{allEntry, "", "team-a", "team-a/child", "team-b"}) {
 		t.Errorf("namespaces: %q", m.ns.results)
 	}
-	if m.ns.cursor != 3 {
-		t.Errorf("cursor starts on %d, want the current namespace (3)", m.ns.cursor)
+	if m.ns.cursor != 4 {
+		t.Errorf("cursor starts on %d, want the current namespace (4)", m.ns.cursor)
 	}
 	v := m.View()
 	for _, want := range []string{"Namespaces", "team-b  (current)", "/  root"} {
@@ -87,7 +90,7 @@ func TestNamespaceSwitcherKeys(t *testing.T) {
 		t.Errorf("no-match view:\n%s", m.View())
 	}
 	m = press(t, m, "esc")
-	if m.mode != modeNamespace || m.ns.input.Value() != "" || len(m.ns.results) != 4 {
+	if m.mode != modeNamespace || m.ns.input.Value() != "" || len(m.ns.results) != 5 {
 		t.Errorf("esc should clear the filter first")
 	}
 	m = press(t, m, "esc")
@@ -103,7 +106,7 @@ func TestNamespaceSwitcherKeys(t *testing.T) {
 	}
 
 	// Switch to another one; choosing the current one again changes nothing.
-	m = press(t, m, "ctrl+n", "up", "down", "enter")
+	m = press(t, m, "ctrl+n", "down", "enter") // from the current (root) to team-a
 	if m.mode != modeList || len(fb.switches) != 1 || fb.switches[0] != "team-a" {
 		t.Errorf("switches: %q", fb.switches)
 	}
@@ -131,5 +134,71 @@ func TestNamespaceSwitcherErrors(t *testing.T) {
 	m = press(t, m, "esc", "ctrl+n")
 	if m.mode != modeLogin {
 		t.Errorf("mode %v, want login", m.mode)
+	}
+}
+
+func TestAllNamespacesMode(t *testing.T) {
+	fb := newFakeBackend(t)
+	var rebuilds []bool
+	orig := fb.allNS
+	fb.allNS = func(ctx context.Context, rebuild bool) ([]index.Entry, cache.Header, string, error) {
+		rebuilds = append(rebuilds, rebuild)
+		return orig(ctx, rebuild)
+	}
+	m := newTest(t, Options{Backend: fb, Entries: testEntries})
+	m = press(t, m, "ctrl+n")
+	m = typeText(t, m, "all")
+	m = press(t, m, "enter")
+	if !m.allNS || m.mode != modeList || len(m.results) != 2 || !reflect.DeepEqual(rebuilds, []bool{false}) {
+		t.Fatalf("allNS %v mode %v rows %d rebuilds %v", m.allNS, m.mode, len(m.results), rebuilds)
+	}
+	v := m.View()
+	for _, want := range []string{"team-a · secret/app/db", "team-b · secret/app/db", "all namespaces"} {
+		if !strings.Contains(plain(v), want) {
+			t.Errorf("view lacks %q:\n%s", want, plain(v))
+		}
+	}
+	// The namespace narrows the search.
+	m = typeText(t, m, "team-b")
+	if len(m.results) != 1 || m.results[0].Entry.Namespace != "team-b" {
+		t.Errorf("team-b: %d rows", len(m.results))
+	}
+	// ^r rebuilds every namespace.
+	m = press(t, m, "ctrl+r")
+	if !reflect.DeepEqual(rebuilds, []bool{false, true}) {
+		t.Errorf("rebuilds %v", rebuilds)
+	}
+	// The switcher marks "all namespaces" as current; picking a namespace
+	// leaves the mode, even the one the client was already in.
+	m = press(t, m, "ctrl+n")
+	if !strings.Contains(plain(m.View()), "all namespaces  search every namespace below at once  (current)") {
+		t.Errorf("switcher:\n%s", plain(m.View()))
+	}
+	m = press(t, m, "down", "enter") // the root: the client's namespace
+	if m.allNS || len(fb.switches) != 1 || fb.switches[0] != "" {
+		t.Errorf("allNS %v switches %q", m.allNS, fb.switches)
+	}
+}
+
+func TestAllNamespacesReadsInTheEntrysNamespace(t *testing.T) {
+	var gotNS []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNS = append(gotNS, r.Header.Get("X-Vault-Namespace"))
+		_, _ = w.Write([]byte(`{"data":{"data":{"password":"from-` + r.Header.Get("X-Vault-Namespace") + `"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	fb := newFakeBackend(t)
+	fb.client, _ = vault.New(vault.Config{Addr: srv.URL, Token: "t"})
+	m := newTest(t, Options{Backend: fb, Entries: testEntries})
+	m = press(t, m, "ctrl+n")
+	m = typeText(t, m, "all")
+	m = press(t, m, "enter")
+	m = typeText(t, m, "team-b")
+	m = press(t, m, "enter")
+	if m.mode != modeDetail || m.detail.values["password"] != "from-team-b" {
+		t.Errorf("mode %v values %v (namespaces asked: %q)", m.mode, m.detail.values, gotNS)
+	}
+	if !strings.Contains(plain(m.View()), "team-b · secret/app/db") {
+		t.Errorf("detail title:\n%s", plain(m.View()))
 	}
 }

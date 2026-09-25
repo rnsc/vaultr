@@ -42,7 +42,8 @@ Usage:
   vaultr [-r] [QUERY...]         interactive search (TUI); -r refreshes the
                                  index first; ^n switches namespace
   vaultr find [flags] QUERY...   print matching path/key pairs (-r refreshes
-                                 the index first)
+                                 the index first; --all-ns searches every
+                                 namespace, which becomes the first column)
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
   vaultr env [flags] PATH...     print the secrets' keys as shell exports
                                  (--prefix APP_, --format sh|fish|json)
@@ -546,6 +547,8 @@ func isCommand(cmd string) bool {
 	return strings.HasPrefix(cmd, "-")
 }
 
+var errNoMounts = errors.New("no KV mounts visible to this token (set VAULTR_MOUNTS)")
+
 func (a *app) kvMounts(ctx context.Context) ([]vault.Mount, error) {
 	if len(a.mounts) == 0 {
 		ms, err := a.client.KVMounts(ctx)
@@ -553,7 +556,7 @@ func (a *app) kvMounts(ctx context.Context) ([]vault.Mount, error) {
 			return nil, err
 		}
 		if len(ms) == 0 {
-			return nil, errors.New("no KV mounts visible to this token (set VAULTR_MOUNTS)")
+			return nil, errNoMounts
 		}
 		return ms, nil
 	}
@@ -679,6 +682,7 @@ func (a *app) find(ctx context.Context, args []string) error {
 	var refresh bool
 	fs.BoolVar(&refresh, "r", false, "refresh the index before searching (finds secrets added since)")
 	fs.BoolVar(&refresh, "refresh", false, "same as -r")
+	allNS := fs.Bool("all-ns", false, "search every namespace the token can use; the namespace is the first column")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
@@ -689,9 +693,12 @@ func (a *app) find(ctx context.Context, args []string) error {
 	}
 	var entries []index.Entry
 	var h cache.Header
-	if refresh {
+	switch {
+	case *allNS:
+		entries, err = a.allNamespacesCLI(ctx, refresh)
+	case refresh:
 		entries, h, err = a.build(ctx, false)
-	} else {
+	default:
 		entries, h, err = a.load(ctx)
 	}
 	if err != nil {
@@ -705,28 +712,42 @@ func (a *app) find(ctx context.Context, args []string) error {
 	for _, r := range rows {
 		var val *string
 		if *withValues && r.Key != "" {
-			vals, ok := secrets[r.Entry.Path]
+			id := r.Entry.Namespace + "\x00" + r.Entry.Path // the same path can exist in two namespaces
+			vals, ok := secrets[id]
 			if !ok {
-				data, err := a.client.ReadSecret(ctx, vault.Mount{Path: r.Entry.Mount, KVVersion: r.Entry.KV}, r.Entry.Rel())
+				c := a.client
+				if *allNS {
+					c = c.InNamespace(r.Entry.Namespace)
+				}
+				data, err := c.ReadSecret(ctx, vault.Mount{Path: r.Entry.Mount, KVVersion: r.Entry.KV}, r.Entry.Rel())
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warning: %s: %v\n", r.Entry.Path, err)
 				}
 				vals = vault.Stringify(data)
-				secrets[r.Entry.Path] = vals
+				secrets[id] = vals
 			}
 			if v, ok := vals[r.Key]; ok {
 				val = &v
 			}
 		}
+		var ns *string
+		if *allNS {
+			l := nsLabel(r.Entry.Namespace)
+			ns = &l
+		}
 		if *asJSON {
 			_ = enc.Encode(struct {
-				Path  string  `json:"path"`
-				Key   string  `json:"key,omitempty"`
-				Value *string `json:"value,omitempty"`
-			}{r.Entry.Path, r.Key, val})
+				Namespace *string `json:"namespace,omitempty"`
+				Path      string  `json:"path"`
+				Key       string  `json:"key,omitempty"`
+				Value     *string `json:"value,omitempty"`
+			}{ns, r.Entry.Path, r.Key, val})
 			continue
 		}
 		line := r.Entry.Path
+		if ns != nil {
+			line = *ns + "\t" + line
+		}
 		if r.Key != "" {
 			line += "\t" + r.Key
 		}

@@ -368,6 +368,23 @@ The list holds your token's namespace and the namespaces below it that its
 policies reach. It comes from `sys/internal/ui/namespaces`, the endpoint
 behind the Vault UI's namespace picker, which any token may call.
 
+#### Searching every namespace
+
+When you don't know which namespace holds a secret:
+
+- **TUI:** the first entry of the `^n` list is **all namespaces**. Results
+  then start with their namespace (`team-a · secret/app/db`), and opening
+  one reads it in that namespace. `^r` rebuilds every namespace; picking a
+  single namespace in `^n` goes back to normal.
+- **CLI:** `vaultr find --all-ns QUERY` adds the namespace as the first
+  column (`namespace` in `--json`).
+
+The namespace name counts as part of the path, so `team-a db` narrows the
+results to team-a. Each namespace keeps its own encrypted cache, the same
+one it uses on its own: valid caches are loaded, and the others are built,
+four namespaces at a time sharing the usual number of workers. Namespaces
+with no KV mounts your token can see are skipped.
+
 ## Cache security
 
 The cache holds secret **paths and key names, never values**. It is written

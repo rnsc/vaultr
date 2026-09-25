@@ -56,3 +56,23 @@ func TestSearch(t *testing.T) {
 		t.Errorf("limit not applied: %d", n)
 	}
 }
+
+func TestNamespaceIsPartOfThePath(t *testing.T) {
+	ix := New([]index.Entry{
+		{Path: "secret/app/db", Keys: []string{"password"}, Namespace: "team-a"},
+		{Path: "secret/app/db", Keys: []string{"password"}, Namespace: "team-b"},
+		{Path: "secret/app/db", Keys: []string{"password"}}, // the root
+	})
+	if got := ix.Search("team-a db", 0); len(got) != 1 || got[0].Entry.Namespace != "team-a" {
+		t.Errorf("team-a db: %+v", got)
+	}
+	if got := ix.Search("p:team-b", 0); len(got) != 1 {
+		t.Errorf("p:team-b: %+v", got)
+	}
+	if got := ix.Search("k:team", 0); len(got) != 0 {
+		t.Errorf("k: must not match namespaces: %+v", got)
+	}
+	if got := ix.Search("db password", 0); len(got) != 3 {
+		t.Errorf("all three namespaces: %d rows", len(got))
+	}
+}

@@ -35,6 +35,7 @@ type fakeBackend struct {
 	reload    func() error
 	nsList    func(context.Context) ([]string, error)
 	adopt     func(context.Context, []index.Entry, cache.Header) (cache.Header, bool, string, error)
+	allNS     func(ctx context.Context, rebuild bool) ([]index.Entry, cache.Header, string, error)
 
 	mu       sync.Mutex
 	switches []string
@@ -67,6 +68,12 @@ func newFakeBackend(t *testing.T) *fakeBackend {
 	fb.adopt = func(context.Context, []index.Entry, cache.Header) (cache.Header, bool, string, error) {
 		return cache.Header{}, false, "", nil
 	}
+	fb.allNS = func(context.Context, bool) ([]index.Entry, cache.Header, string, error) {
+		return []index.Entry{
+			{Path: "secret/app/db", Mount: "secret/", KV: 2, Keys: []string{"password"}, Namespace: "team-a"},
+			{Path: "secret/app/db", Mount: "secret/", KV: 2, Keys: []string{"password"}, Namespace: "team-b"},
+		}, cache.Header{Expires: time.Now().Add(time.Hour), KeyRef: "k"}, "", nil
+	}
 	fb.nsList = func(context.Context) ([]string, error) {
 		return []string{"", "team-a", "team-a/child", "team-b"}, nil
 	}
@@ -86,6 +93,9 @@ func (f *fakeBackend) Login(ctx context.Context, r auth.Request) (string, string
 	f.logins = append(f.logins, r)
 	f.mu.Unlock()
 	return f.login(ctx, r)
+}
+func (f *fakeBackend) AllNamespaces(ctx context.Context, rebuild bool, _ func(index.Progress)) ([]index.Entry, cache.Header, string, error) {
+	return f.allNS(ctx, rebuild)
 }
 func (f *fakeBackend) Adopt(ctx context.Context, e []index.Entry, h cache.Header) (cache.Header, bool, string, error) {
 	return f.adopt(ctx, e, h)

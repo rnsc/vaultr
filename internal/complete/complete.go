@@ -34,7 +34,7 @@ var (
 	// Every command but login takes --ns/--namespace, before or after it.
 	flags = map[string][]string{
 		"":       {"-r", "--refresh", "--ns", "--namespace"}, // before any command
-		"find":   {"--json", "--values", "-n", "-r", "--refresh", "--ns", "--namespace"},
+		"find":   {"--json", "--values", "-n", "-r", "--refresh", "--all-ns", "--ns", "--namespace"},
 		"get":    {"--json", "--ns", "--namespace"},
 		"env":    {"--prefix", "--format", "--ns", "--namespace"},
 		"exec":   {"--prefix", "--ns", "--namespace"},

@@ -62,9 +62,15 @@ func (m model) namespacesLoaded(msg namespacesMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLogin("Your token is missing, expired or revoked.")
 	}
 	m.ns.loading, m.ns.err, m.ns.all = false, msg.err, msg.list
+	if len(msg.list) > 1 {
+		m.ns.all = append([]string{allEntry}, msg.list...)
+	}
 	m.filterNamespaces()
 	// Start on the current namespace.
 	cur := m.backend().Client().Namespace
+	if m.allNS {
+		cur = allEntry
+	}
 	for i, ns := range m.ns.results {
 		if ns == cur {
 			m.ns.cursor = i
@@ -142,9 +148,19 @@ func (m model) updateNamespace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		ns := m.ns.results[m.ns.cursor]
 		m.mode = modeList
-		if ns == m.backend().Client().Namespace {
+		if ns == allEntry {
+			if m.allNS {
+				return m, nil
+			}
+			m.allNS = true
+			m.ix, m.results, m.header = nil, nil, cache.Header{}
+			m.notice, m.noticeErr = "searching all namespaces", false
+			return m, m.startIndex(false) // cached namespaces load, the rest build
+		}
+		if ns == m.backend().Client().Namespace && !m.allNS {
 			return m, nil
 		}
+		m.allNS = false
 		m.backend().SwitchNamespace(ns)
 		// Another namespace, another index: load it, or build it.
 		m.ix, m.results, m.header = nil, nil, cache.Header{}
@@ -162,11 +178,18 @@ func (m model) updateNamespace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // nsLabel names a namespace for display: "/" is the root.
 func nsLabel(ns string) string {
-	if ns == "" {
+	switch ns {
+	case "":
 		return "/"
+	case allEntry:
+		return "all namespaces"
 	}
 	return ns
 }
+
+// allEntry is the switcher's first entry: search every namespace at once.
+// It can't clash with a namespace name, which can't hold a NUL byte.
+const allEntry = "\x00all"
 
 func (m model) viewNamespace() string {
 	s := m.ns
@@ -189,13 +212,19 @@ func (m model) viewNamespace() string {
 		lines++
 	default:
 		cur := m.backend().Client().Namespace
+		if m.allNS {
+			cur = allEntry
+		}
 		terms := highlightTerms(s.input.Value())
 		end := min(s.offset+h, len(s.results))
 		for i := s.offset; i < end; i++ {
 			ns := s.results[i]
 			line := highlight(nsLabel(ns), terms, lipgloss.NewStyle())
-			if ns == "" {
+			switch ns {
+			case "":
 				line += sSubtle.Render("  root")
+			case allEntry:
+				line += sSubtle.Render("  search every namespace below at once")
 			}
 			if ns == cur {
 				line += sKey.Render("  (current)")

@@ -27,6 +27,11 @@ func New(entries []index.Entry) *Index {
 	for i := range entries {
 		e := &entries[i]
 		lp := strings.ToLower(e.Path)
+		if e.Namespace != "" {
+			// Searching several namespaces: the namespace counts as part of
+			// the path, so "team-a db" narrows to team-a.
+			lp = strings.ToLower(e.Namespace) + "/" + lp
+		}
 		if len(e.Keys) == 0 {
 			ix.Rows = append(ix.Rows, Row{Entry: e, path: lp})
 			continue
