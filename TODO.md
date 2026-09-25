@@ -5,22 +5,10 @@ each item becomes its own branch when picked up. All of them keep the
 rules in AGENTS.md: only paths and key names are stored, values are read
 live.
 
-## In progress
+## Done
 
-- [ ] **Auto-login** (`auth.auto_login = true`): when the token is missing,
-  expired or revoked, log in with the `[auth]` settings instead of showing
-  the login screen first. OIDC opens the browser right away; ldap/userpass
-  open the login screen with the username filled in and the password
-  focused. CLI commands do it only on a terminal; scripts still fail with
-  an error. Never from tab completion.
-- [ ] **Resume after login:** an action that fails because the token
-  expired (open, copy value, reveal) goes to login, then finishes with the
-  new token. Search, results and selection stay in place.
-- [ ] **No re-crawl after re-login:** keep the in-memory index and save it
-  again under the new token when it belongs to the same identity (entity);
-  rebuild when it doesn't.
-- [ ] **Token expiry in the status line:** "token expires in 12m", yellow
-  near the end; suggest `^l` for tokens that can't be renewed.
+- [x] Auto-login (`auth.auto_login`), resume after login, keeping the index
+  after a re-login by the same identity, token expiry countdown (v0.6.0).
 
 ## Next
 
