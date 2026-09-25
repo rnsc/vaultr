@@ -644,8 +644,11 @@ func (m model) selected() (search.Row, bool) {
 	return m.results[m.cursor], true
 }
 
+// listHelp is the list's help line.
+const listHelp = "↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^n namespace · ^l login · ^e config · esc clear · ^c quit"
+
 func (m model) listHeight() int {
-	h := m.height - 3 // input, status, help
+	h := m.height - 2 - helpLines(listHelp, m.width) // input, status, help
 	if h < 1 {
 		h = 1
 	}
@@ -773,9 +776,11 @@ func (m model) viewList() string {
 	lines := 0
 	for i := m.offset; i < end; i++ {
 		r := m.results[i]
-		line := renderRow(r, terms, m.width-2, m.allNS)
+		var line string
 		if i < m.recentN {
-			line = truncate(line+sSubtle.Render("  recent"), m.width-2)
+			line = renderRow(r, terms, m.width-2-len("  recent"), m.allNS) + sSubtle.Render("  recent")
+		} else {
+			line = renderRow(r, terms, m.width-2, m.allNS)
 		}
 		if i == m.cursor {
 			line = sPointer.Render("▌") + sSel.Width(m.width-1).Render(line)
@@ -798,7 +803,8 @@ func (m model) viewList() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter open · ^y copy value · ^o copy path · ^r refresh · ^n namespace · ^l login · ^e config · esc clear · ^c quit", m.width)))
+	helpText, _ := helpBlock(listHelp, m.width)
+	b.WriteString(helpText)
 	return b.String()
 }
 
@@ -893,18 +899,37 @@ func (m model) viewDetail() string {
 			lines++
 		}
 	}
-	for ; lines < m.height-2; lines++ {
+	helpText, helpN := helpBlock("↑↓ move · r reveal · c copy value · y copy path"+d.versionHelp()+" · o Vault UI · R reload · esc back", m.width)
+	for ; lines < m.height-1-helpN; lines++ {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · r reveal · c copy value · y copy path"+d.versionHelp()+" · o Vault UI · R reload · esc back", m.width)))
+	b.WriteString(helpText)
 	return b.String()
 }
 
 func renderRow(r search.Row, terms []string, width int, withNS bool) string {
 	e := r.Entry
-	mount := highlight(e.Mount, terms, sSubtle)
-	rest := highlight(e.Rel(), terms, lipgloss.NewStyle())
+	// Too wide: the middle of the path gives way first, so the mount, the
+	// end of the path and the key stay visible.
+	mountText, rel := e.Mount, e.Rel()
+	other := 0 // namespace and key
+	if withNS {
+		other += lipgloss.Width(nsLabel(e.Namespace)) + 3
+	}
+	if r.Key != "" {
+		other += 4 + lipgloss.Width(r.Key)
+	}
+	room := width - other
+	switch {
+	case lipgloss.Width(mountText)+lipgloss.Width(rel) <= room:
+	case room-lipgloss.Width(mountText) >= 6:
+		rel = tail(rel, room-lipgloss.Width(mountText))
+	case room >= 6: // very narrow: the mount gives way too
+		mountText, rel = "", tail(mountText+rel, room)
+	}
+	mount := highlight(mountText, terms, sSubtle)
+	rest := highlight(rel, terms, lipgloss.NewStyle())
 	s := mount + rest
 	if withNS {
 		s = highlight(nsLabel(e.Namespace), terms, sKey) + sSubtle.Render(" · ") + s

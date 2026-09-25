@@ -276,14 +276,15 @@ func (m model) viewLogin() string {
 	case l.err != nil:
 		b.WriteString(" " + sErr.Render(wordWrap(l.err.Error(), m.width-2)) + "\n")
 	}
+	helpText := "tab/↑↓ field · ←→ method · enter log in · esc back · ^c quit"
+	if l.busy {
+		helpText = "esc cancel · ^c quit"
+	}
+	rendered, helpN := helpBlock(helpText, m.width)
 	lines := strings.Count(b.String(), "\n")
-	for ; lines < m.height-1; lines++ {
+	for ; lines < m.height-helpN; lines++ {
 		b.WriteString("\n")
 	}
-	help := "tab/↑↓ field · ←→ method · enter log in · esc back · ^c quit"
-	if l.busy {
-		help = "esc cancel · ^c quit"
-	}
-	b.WriteString(sSubtle.Render(truncate(help, m.width)))
+	b.WriteString(rendered)
 	return b.String()
 }

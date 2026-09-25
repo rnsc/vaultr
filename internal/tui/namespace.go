@@ -112,7 +112,11 @@ func (m *model) moveNamespace(n int) {
 	}
 }
 
-func (m model) nsListHeight() int { return max(1, m.height-5) } // title, blank, input, status, keys
+const nsHelp = "↑↓ move · enter switch · esc/^n back · ^c quit"
+
+// nsListHeight leaves room for the title, a blank line, the input, the
+// status line and the help.
+func (m model) nsListHeight() int { return max(1, m.height-4-helpLines(nsHelp, m.width)) }
 
 func (m model) updateNamespace(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -243,6 +247,7 @@ func (m model) viewNamespace() string {
 		b.WriteString("\n")
 	}
 	b.WriteString(m.statusLine() + "\n")
-	b.WriteString(sSubtle.Render(truncate("↑↓ move · enter switch · esc/^n back · ^c quit", m.width)))
+	helpText, _ := helpBlock(nsHelp, m.width)
+	b.WriteString(helpText)
 	return b.String()
 }
