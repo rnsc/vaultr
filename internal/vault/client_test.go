@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,5 +207,76 @@ func TestInNamespace(t *testing.T) {
 	ns, by, ok := n.KnownTokenNamespace()
 	if n.Namespace != "b/c" || n.Token() != "t2" || ns != "root-ish" || by != "login" || !ok || c.Namespace != "a" {
 		t.Errorf("InNamespace: %+v (%q %q %v), original %q", n, ns, by, ok, c.Namespace)
+	}
+}
+
+func TestRetryOnRateLimit(t *testing.T) {
+	var waits []time.Duration
+	orig := sleep
+	sleep = func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }
+	t.Cleanup(func() { sleep = orig })
+
+	limited := 0 // how many 429s are left to send
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if limited > 0 {
+			limited--
+			if limited == 1 {
+				w.Header().Set("Retry-After", "3")
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"errors":["request path \"x\": rate limit quota exceeded"]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"ok":true}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := New(Config{Addr: srv.URL, Token: "t"})
+
+	// Three 429s, then success; the body is sent again each time.
+	limited = 3
+	if _, err := c.Write(context.Background(), "secret/data/x", map[string]string{"a": "b"}); err != nil {
+		t.Fatalf("after retries: %v", err)
+	}
+	if len(bodies) != 4 || bodies[3] != `{"a":"b"}` {
+		t.Errorf("requests %q", bodies)
+	}
+	if len(waits) != 3 || waits[1] != 3*time.Second {
+		t.Errorf("waits %v (the second 429 carries Retry-After: 3)", waits)
+	}
+	for i, w := range waits[:1] {
+		if w < 125*time.Millisecond || w > 250*time.Millisecond {
+			t.Errorf("backoff %d: %v", i, w)
+		}
+	}
+
+	// It gives up after maxRetries and reports the 429.
+	limited, waits = 100, nil
+	_, err := c.Read(context.Background(), "secret/data/x")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 429") || len(waits) != maxRetries {
+		t.Errorf("err %v after %d waits", err, len(waits))
+	}
+
+	// A cancelled context stops the waiting.
+	sleep = orig
+	limited = 100
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Read(ctx, "secret/data/x"); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v", err)
+	}
+}
+
+func TestRetryDelay(t *testing.T) {
+	if d := retryDelay(0, "120"); d != 10*time.Second {
+		t.Errorf("Retry-After capped: %v", d)
+	}
+	if d := retryDelay(20, ""); d > 10*time.Second || d < 5*time.Second {
+		t.Errorf("backoff capped: %v", d)
+	}
+	if d := retryDelay(2, "soon"); d < 500*time.Millisecond || d > time.Second {
+		t.Errorf("bad Retry-After falls back to backoff: %v", d)
 	}
 }
