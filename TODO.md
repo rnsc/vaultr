@@ -11,12 +11,7 @@ live.
   after a re-login by the same identity, token expiry countdown (v0.6.0).
 - [x] `vaultr env` / `vaultr exec` (v0.7.0).
 - [x] Search across all namespaces (v0.8.0), retry on HTTP 429 (v0.8.1).
-
-## Next
-
-- [ ] **Versions and metadata** (KV v2, branch `secret-versions`): which
-  version is shown and when it was written, step to older ones, `vaultr
-  versions`, `get --version`. Vault doesn't record who wrote a version.
+- [x] Secret versions (KV v2): version line, `[`/`]`, `vaultr versions`, `get --version` (v0.9.0).
 
 ## Later
 
