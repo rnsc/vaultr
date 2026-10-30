@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -337,12 +338,58 @@ func TestSecretVersions(t *testing.T) {
 
 func TestUIURL(t *testing.T) {
 	c, _ := New(Config{Addr: "https://vault.example.com:8200/", Token: "t"})
-	if got := c.UIURL(Mount{Path: "secret/", KVVersion: 2}, "app/db"); got != "https://vault.example.com:8200/ui/vault/secrets/secret/show/app/db" {
+	if got := c.UIURL(Mount{Path: "secret/", KVVersion: 2}, "app/db", UILogin{}); got != "https://vault.example.com:8200/ui/vault/secrets/secret/show/app/db" {
 		t.Errorf("plain: %s", got)
 	}
 	ns := c.InNamespace("team-a/child")
-	if got := ns.UIURL(Mount{Path: "team/kv/", KVVersion: 1}, "odd/with space/hash#tag"); got !=
+	if got := ns.UIURL(Mount{Path: "team/kv/", KVVersion: 1}, "odd/with space/hash#tag", UILogin{}); got !=
 		"https://vault.example.com:8200/ui/vault/secrets/team%2Fkv/show/odd/with%20space/hash%23tag?namespace=team-a%2Fchild" {
 		t.Errorf("namespace, nested mount, odd names: %s", got)
+	}
+}
+
+func TestUIURLLogin(t *testing.T) {
+	c, _ := New(Config{Addr: "https://vault.example.com:8200", Token: "t"})
+	const base = "https://vault.example.com:8200/ui/vault/"
+	for _, tc := range []struct {
+		name  string
+		c     *Client
+		login UILogin
+		want  string
+	}{
+		// The UI's default login form: the secret's own address.
+		{"token", c, UILogin{Method: "token"}, base + "secrets/secret/show/app/db"},
+		{"unset", c, UILogin{Mount: "sso", Role: "dev"}, base + "secrets/secret/show/app/db"},
+		// A default mount goes by its type, which the UI takes even when
+		// the mount is not listed on the login page.
+		{"oidc", c, UILogin{Method: "oidc"}, base + "auth?with=oidc&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		{"oidc mount", c, UILogin{Method: "oidc", Mount: "oidc/"}, base + "auth?with=oidc&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		{"ldap", c, UILogin{Method: "ldap"}, base + "auth?with=ldap&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		{"userpass", c, UILogin{Method: "userpass"}, base + "auth?with=userpass&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		// Any other mount goes by its path, with a trailing slash.
+		{"custom mount", c, UILogin{Method: "oidc", Mount: "sso", Role: "dev"},
+			base + "auth?with=sso%2F&role=dev&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		{"nested mount", c, UILogin{Method: "ldap", Mount: "/corp/ldap/"},
+			base + "auth?with=corp%2Fldap%2F&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb"},
+		// The login happens in the auth namespace; the secret's namespace
+		// stays inside redirect_to, so it is encoded twice.
+		{"secret in a namespace", c.InNamespace("team-a/child"), UILogin{Method: "oidc", Mount: "sso"},
+			base + "auth?with=sso%2F&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb%3Fnamespace%3Dteam-a%252Fchild"},
+		{"both in namespaces", c.InNamespace("team-a/child"), UILogin{Method: "oidc", Mount: "sso", Namespace: "team-a"},
+			base + "auth?with=sso%2F&namespace=team-a&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%2Fdb%3Fnamespace%3Dteam-a%252Fchild"},
+	} {
+		if got := tc.c.UIURL(Mount{Path: "secret/", KVVersion: 2}, "app/db", tc.login); got != tc.want {
+			t.Errorf("%s:\n got %s\nwant %s", tc.name, got, tc.want)
+		}
+	}
+	// Odd names are escaped in the route, then the route as a whole.
+	got := c.UIURL(Mount{Path: "team/kv/", KVVersion: 1}, "odd/with space/hash#tag", UILogin{Method: "oidc"})
+	want := base + "auth?with=oidc&redirect_to=%2Fvault%2Fsecrets%2Fteam%252Fkv%2Fshow%2Fodd%2Fwith%2520space%2Fhash%2523tag"
+	if got != want {
+		t.Errorf("odd names:\n got %s\nwant %s", got, want)
+	}
+	u, err := url.Parse(got)
+	if err != nil || u.Query().Get("redirect_to") != "/vault/secrets/team%2Fkv/show/odd/with%20space/hash%23tag" {
+		t.Errorf("redirect_to does not decode to the plain route: %v %q", err, u.Query().Get("redirect_to"))
 	}
 }

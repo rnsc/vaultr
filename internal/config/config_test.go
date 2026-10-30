@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rnsc/vaultr/internal/vault"
 )
 
 var allEnv = []string{
@@ -240,5 +242,12 @@ func TestRevealTimeout(t *testing.T) {
 	isolate(t, map[string]string{"VAULTR_REVEAL_TIMEOUT": "soon"}, "")
 	if _, err := Load(); err == nil {
 		t.Error("bad duration accepted")
+	}
+}
+
+func TestUILogin(t *testing.T) {
+	a := AuthSettings{Method: "oidc", Mount: "sso", Role: "dev", Username: "u", Namespace: "team-a", CallbackPort: 8250}
+	if got, want := a.UILogin(), (vault.UILogin{Method: "oidc", Mount: "sso", Role: "dev", Namespace: "team-a"}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }

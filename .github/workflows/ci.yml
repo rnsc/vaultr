@@ -93,6 +93,8 @@ jobs:
         env:
           VAULT_ADDR: http://127.0.0.1:8200
           VAULT_TOKEN: root
+          # The runner images ship Chrome: the web UI tests must not skip.
+          VAULTR_REQUIRE_BROWSER: "1"
         run: >
           go test -tags integration -race -count=1 -v
           -coverpkg=./internal/...

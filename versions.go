@@ -102,7 +102,7 @@ func (a *app) open(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	u := a.client.UIURL(m, rel)
+	u := a.client.UIURL(m, rel, a.settings.Auth.UILogin())
 	if *printOnly {
 		fmt.Println(u)
 		return nil

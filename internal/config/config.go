@@ -307,6 +307,11 @@ func Load() (*Settings, error) {
 	return s, nil
 }
 
+// UILogin is the login the web UI should offer for `vaultr open`.
+func (a AuthSettings) UILogin() vault.UILogin {
+	return vault.UILogin{Method: a.Method, Mount: a.Mount, Role: a.Role, Namespace: a.Namespace}
+}
+
 // RequireToken fails when no token was found.
 func (s *Settings) RequireToken() error {
 	if s.Vault.Token == "" {

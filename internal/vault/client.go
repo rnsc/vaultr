@@ -418,16 +418,60 @@ func (c *Client) ReadSecret(ctx context.Context, m Mount, rel string) (map[strin
 	return d, nil
 }
 
-// UIURL is the secret's page in the Vault web UI. The /show/ address works
-// in every UI: OpenBao's and Vault's before 1.15 show the secret there,
-// newer ones redirect KV v2 secrets to their KV page (and Vault 2's
+// UILogin is how the web UI should offer to log in when the browser has no
+// UI session yet.
+type UILogin struct {
+	Method    string // "oidc", "ldap" or "userpass"; anything else = the UI's default
+	Mount     string // auth mount; "" = the method name
+	Role      string // prefilled by Vault's UI (OpenBao's ignores it)
+	Namespace string // where the auth mount is; "" = root
+}
+
+// UIURL is the secret's page in the Vault web UI. The /show/ route works in
+// every UI: OpenBao's and Vault's before 1.15 show the secret there, newer
+// ones redirect KV v2 secrets to their KV page (and Vault 2's
 // /secrets-engines/ accepts the older /secrets/ prefix).
-func (c *Client) UIURL(m Mount, rel string) string {
-	u := c.Addr + "/ui/vault/secrets/" + url.PathEscape(strings.TrimSuffix(m.Path, "/")) + "/show/" + escapePath(rel)
+//
+// With a login method, the address is the UI's login page instead, which
+// goes on to the secret (redirect_to). A logged-in browser passes straight
+// through it. The method can't go on the secret's address: the UI drops it
+// when it sends a logged-out browser to the login page, and that page would
+// look for the auth mount in the secret's namespace.
+func (c *Client) UIURL(m Mount, rel string, login UILogin) string {
+	route := "/vault/secrets/" + url.PathEscape(strings.TrimSuffix(m.Path, "/")) + "/show/" + escapePath(rel)
 	if c.Namespace != "" {
-		u += "?namespace=" + url.QueryEscape(c.Namespace)
+		route += "?namespace=" + url.QueryEscape(c.Namespace)
 	}
-	return u
+	with := login.with()
+	if with == "" {
+		return c.Addr + "/ui" + route
+	}
+	// Written out rather than url.Values, which would sort with last.
+	u := c.Addr + "/ui/vault/auth?with=" + url.QueryEscape(with)
+	if login.Role != "" {
+		u += "&role=" + url.QueryEscape(login.Role)
+	}
+	if login.Namespace != "" {
+		u += "&namespace=" + url.QueryEscape(login.Namespace)
+	}
+	return u + "&redirect_to=" + url.QueryEscape(route)
+}
+
+// with is the login page's with= value: the method's name for its default
+// mount, which the UI accepts whether or not the mount is listed on the
+// login page, else the mount path, which it accepts only when listed
+// (listing_visibility=unauth); otherwise it shows its default method.
+func (l UILogin) with() string {
+	switch l.Method {
+	case "oidc", "ldap", "userpass":
+	default:
+		return ""
+	}
+	mount := strings.Trim(l.Mount, "/")
+	if mount == "" || mount == l.Method {
+		return l.Method
+	}
+	return mount + "/"
 }
 
 // ErrNoVersions means the mount keeps no versions (KV v1).
