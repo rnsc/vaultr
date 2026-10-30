@@ -611,7 +611,7 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.stepVersion(msg.String() == "[")
 	case "o":
 		e := d.row.Entry
-		u := m.clientFor(e).UIURL(vault.Mount{Path: e.Mount, KVVersion: e.KV}, e.Rel())
+		u := m.clientFor(e).UIURL(vault.Mount{Path: e.Mount, KVVersion: e.KV}, e.Rel(), m.backend().Settings().Auth.UILogin())
 		if err := openBrowser(u); err != nil {
 			return m, m.setFlash("could not open a browser: "+u, true)
 		}

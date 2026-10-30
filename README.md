@@ -175,6 +175,20 @@ ask you to log in first; it then takes you to the secret. On Vault 1.15
 and later, KV v2 secrets open on their Overview tab; the values are on the
 Secret tab.
 
+When `[auth] method` is `oidc`, `ldap` or `userpass`, the address goes
+through the UI's login page with that method selected, so you don't have
+to pick it by hand. A browser that is already logged in goes straight on
+to the secret. The login happens in `[auth] namespace` (by default
+`token_namespace`, else the root), even when the secret is in another
+namespace.
+
+- A mount at the method's default path (`oidc/`) always works.
+- A mount at another path (`sso/`) is selected only if it is listed on the
+  login page (`listing_visibility=unauth`), which is how sites usually set
+  up OIDC for the UI. Otherwise the UI shows its default method.
+- `role` is filled in by Vault's UI. OpenBao's UI ignores it.
+- With `token`, or no method set, the address is the secret's own page.
+
 ### Finding secrets added recently
 
 The index is a snapshot, rebuilt at most every 2 hours. If a secret was

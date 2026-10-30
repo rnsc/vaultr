@@ -57,7 +57,7 @@ var Fields = []Field{
 	{Key: "reveal_timeout", Kind: KindDuration, Help: `Hide values revealed in the TUI again after this long ("0" keeps them shown).`, Example: `"30s"`, Env: "VAULTR_REVEAL_TIMEOUT"},
 	{Key: "cache_dir", Help: "Where the encrypted index lives.", Example: `""`, Env: "VAULTR_CACHE_DIR"},
 
-	{Key: "auth.method", Kind: KindChoice, Choices: []string{"", "oidc", "ldap", "userpass", "token"}, Help: "Login method for `vaultr login` and the TUI login screen.", Example: `"oidc"`},
+	{Key: "auth.method", Kind: KindChoice, Choices: []string{"", "oidc", "ldap", "userpass", "token"}, Help: "Login method for `vaultr login`, the TUI login screen and the web UI login page `vaultr open` goes through.", Example: `"oidc"`},
 	{Key: "auth.mount", Help: "Auth mount path, when it differs from the method name.", Example: `"oidc"`},
 	{Key: "auth.role", Help: "OIDC role; empty uses the mount's default role.", Example: `""`},
 	{Key: "auth.username", Help: "Username for ldap / userpass.", Example: `"jdoe"`},

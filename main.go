@@ -47,7 +47,8 @@ Usage:
   vaultr get [flags] PATH [KEY]  print a secret, or one key's value
   vaultr versions PATH           list a secret's versions (KV v2); read an
                                  older one with get --version N
-  vaultr open [--print] PATH     open a secret in the Vault web UI
+  vaultr open [--print] PATH     open a secret in the Vault web UI, through
+                                 its login page when [auth] method is set
   vaultr env [flags] PATH...     print the secrets' keys as shell exports
                                  (--prefix APP_, --format sh|fish|json)
   vaultr exec PATH... -- CMD     run CMD with the secrets' keys as

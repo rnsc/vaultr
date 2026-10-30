@@ -53,3 +53,11 @@ func OIDCRole(ctx context.Context, admin *Admin, ns, mount, role, clientID strin
 func DisableAuth(ctx context.Context, admin *Admin, ns, mount string) {
 	_ = admin.In(ns).delete(ctx, "sys/auth/"+mount)
 }
+
+// ShowOnLoginPage lists an auth mount on the web UI's login page
+// (listing_visibility=unauth), as sys/internal/ui/mounts reports it to
+// anyone.
+func ShowOnLoginPage(ctx context.Context, admin *Admin, ns, mount string) error {
+	_, err := admin.In(ns).write(ctx, "sys/auth/"+mount+"/tune", map[string]any{"listing_visibility": "unauth"})
+	return err
+}

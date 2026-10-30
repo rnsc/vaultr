@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rnsc/vaultr/internal/config"
 	"github.com/rnsc/vaultr/internal/index"
 	"github.com/rnsc/vaultr/internal/vault"
 )
@@ -131,5 +132,13 @@ func TestOpenInVaultUI(t *testing.T) {
 	m = press(t, m, "enter", "o")
 	if !strings.HasSuffix(opened, "/ui/vault/secrets/secret/show/app?namespace=team-a") || !strings.Contains(m.flash, "opened in the browser") {
 		t.Errorf("opened %q, flash %q", opened, m.flash)
+	}
+
+	// With an OIDC login configured, it goes through the UI's login page
+	// on that mount, then to the secret.
+	fb.settings.Auth = config.AuthSettings{Method: "oidc", Mount: "sso"}
+	m = press(t, m, "o")
+	if !strings.HasSuffix(opened, "/ui/vault/auth?with=sso%2F&redirect_to=%2Fvault%2Fsecrets%2Fsecret%2Fshow%2Fapp%3Fnamespace%3Dteam-a") {
+		t.Errorf("with an oidc login: opened %q", opened)
 	}
 }
