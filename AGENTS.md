@@ -111,7 +111,8 @@ releases nothing. The signed file goes to `extension/dist/vaultr.xpi`
 release with its checksum. AMO signs a version once: a rerun downloads
 the already signed file (`tools/amo`), and either way it must hold
 exactly the files exported from the release commit. Prereleases get no
-signed add-on.
+signed add-on. CI's `firefox-addon` job rehearses all of this except
+the AMO call (`scripts/sign-firefox.sh --unsigned`).
 
 ## Writing style
 

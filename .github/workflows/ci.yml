@@ -196,6 +196,36 @@ jobs:
         if: always()
         run: scripts/vault-dev.sh stop
 
+  # Rehearses the release's Firefox add-on, everything but signing on AMO:
+  # package it as the release does (web-ext build in place of web-ext
+  # sign), check it against the exported files, build vaultr with it
+  # embedded, install it, and check what the install wrote. A separate job,
+  # so the snapshot binaries below don't carry an unsigned add-on.
+  firefox-addon:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Package the add-on as a release would (unsigned)
+        run: scripts/sign-firefox.sh --unsigned v0.0.1
+      - name: vaultr embeds it and installs it
+        run: |
+          go build -o "$RUNNER_TEMP/vaultr" .
+          home="$RUNNER_TEMP/home"
+          mkdir -p "$home"
+          env -i PATH="$PATH" HOME="$home" "$RUNNER_TEMP/vaultr" extension install --browser firefox \
+            --path "$RUNNER_TEMP/vaultr" 2> "$RUNNER_TEMP/install.log"
+          cat "$RUNNER_TEMP/install.log"
+          xpi="$home/.local/share/vaultr/extension/vaultr.xpi"
+          cmp extension/dist/vaultr.xpi "$xpi"
+          grep -qF "Open $xpi in Firefox" "$RUNNER_TEMP/install.log"
+          grep -qF '"vaultr@rnsc.be"' "$home/.mozilla/native-messaging-hosts/be.rnsc.vaultr.json"
+          go run . extension export --browser firefox --version v0.0.1 "$RUNNER_TEMP/src"
+          go run ./tools/amo verify -xpi "$xpi" -dir "$RUNNER_TEMP/src"
+          unzip -p "$xpi" manifest.json | grep -qF '"version": "0.0.1"'
+
   # Dry run of the release build (all targets), with the binaries attached
   # to the workflow run for manual testing.
   build:
@@ -294,7 +324,7 @@ jobs:
   # Single required check for branch protection.
   ci-ok:
     if: always()
-    needs: [lint, unit, integration, windows, build, cask]
+    needs: [lint, unit, integration, windows, firefox-addon, build, cask]
     runs-on: ubuntu-24.04
     steps:
       - name: All jobs passed
