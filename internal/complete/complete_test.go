@@ -204,6 +204,7 @@ func TestEveryRegisteredShell(t *testing.T) {
 
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 			t.Setenv("XDG_CONFIG_HOME", "")
 			if sh.RCDirEnv != "" {
 				t.Setenv(sh.RCDirEnv, "")
@@ -256,6 +257,7 @@ func TestUnknownShell(t *testing.T) {
 func TestInstallRCDetails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("ZDOTDIR", "")
 	_ = os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export FOO=1"), 0o644) // no trailing newline
 	if _, err := Install("zsh"); err != nil {

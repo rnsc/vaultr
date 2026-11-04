@@ -174,16 +174,13 @@ func (e Env) XPIPath() string {
 
 // HostManifestPath is the native messaging host manifest file for b. On
 // macOS and Linux the browser looks in that folder; on Windows the file
-// can be anywhere and RegistryKey points to it.
+// can be anywhere and RegistryKey points to it. Each browser gets its own
+// file there too, so uninstalling from one leaves the others working.
 func (e Env) HostManifestPath(b Browser) string {
 	file := HostName + ".json"
 	switch e.GOOS {
 	case "windows":
-		family := "chromium"
-		if b == Firefox {
-			family = "firefox"
-		}
-		return e.join(e.localAppData(), "vaultr", "NativeMessagingHosts", family, file)
+		return e.join(e.localAppData(), "vaultr", "NativeMessagingHosts", string(b), file)
 	case "darwin":
 		dir := map[Browser]string{
 			Chrome:   "Google/Chrome",

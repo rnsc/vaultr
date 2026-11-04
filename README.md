@@ -290,7 +290,7 @@ Where the files go:
 |---|---|---|
 | macOS | `~/Library/Application Support/vaultr/extension/` | `~/Library/Application Support/<browser>/NativeMessagingHosts/be.rnsc.vaultr.json` |
 | Linux | `~/.local/share/vaultr/extension/` | `~/.config/<browser>/NativeMessagingHosts/` (Firefox: `~/.mozilla/native-messaging-hosts/`) |
-| Windows | `%LOCALAPPDATA%\vaultr\extension\` | `%LOCALAPPDATA%\vaultr\NativeMessagingHosts\`, registered under `HKEY_CURRENT_USER\Software\<browser>\NativeMessagingHosts\be.rnsc.vaultr` |
+| Windows | `%LOCALAPPDATA%\vaultr\extension\` | `%LOCALAPPDATA%\vaultr\NativeMessagingHosts\<browser>\`, registered under `HKEY_CURRENT_USER\Software\<browser>\NativeMessagingHosts\be.rnsc.vaultr` |
 
 The host manifest points to the `vaultr` on your `PATH` when that is the
 binary you ran, so a Homebrew upgrade (which moves the binary to a new

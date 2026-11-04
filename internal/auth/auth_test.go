@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -227,7 +228,7 @@ func TestSaveToken(t *testing.T) {
 	p := filepath.Join(home, ".vault-token")
 	b, _ := os.ReadFile(p)
 	st, _ := os.Stat(p)
-	if string(b) != "hvs.saved" || st.Mode().Perm() != 0o600 {
+	if string(b) != "hvs.saved" || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) { // no Unix modes on Windows
 		t.Errorf("content %q mode %v", b, st.Mode().Perm())
 	}
 	t.Setenv("VAULT_TOKEN", "hvs.env")
@@ -237,6 +238,9 @@ func TestSaveToken(t *testing.T) {
 }
 
 func TestOpenBrowserUsesBROWSER(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake browser is a shell script")
+	}
 	out := filepath.Join(t.TempDir(), "url")
 	script := filepath.Join(t.TempDir(), "browser.sh")
 	_ = os.WriteFile(script, []byte("#!/bin/sh\necho \"$1\" > "+out+"\n"), 0o755)

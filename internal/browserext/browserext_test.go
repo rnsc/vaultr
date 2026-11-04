@@ -70,8 +70,8 @@ func TestHostManifestPaths(t *testing.T) {
 		{mac, Brave, "/Users/u/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts" + f},
 		{mac, Edge, "/Users/u/Library/Application Support/Microsoft Edge/NativeMessagingHosts" + f},
 		{mac, Firefox, "/Users/u/Library/Application Support/Mozilla/NativeMessagingHosts" + f},
-		{win, Chrome, `C:\Users\u\AppData\Local\vaultr\NativeMessagingHosts\chromium\be.rnsc.vaultr.json`},
-		{win, Edge, `C:\Users\u\AppData\Local\vaultr\NativeMessagingHosts\chromium\be.rnsc.vaultr.json`},
+		{win, Chrome, `C:\Users\u\AppData\Local\vaultr\NativeMessagingHosts\chrome\be.rnsc.vaultr.json`},
+		{win, Edge, `C:\Users\u\AppData\Local\vaultr\NativeMessagingHosts\edge\be.rnsc.vaultr.json`},
 		{win, Firefox, `C:\Users\u\AppData\Local\vaultr\NativeMessagingHosts\firefox\be.rnsc.vaultr.json`},
 	} {
 		if got := tc.env.HostManifestPath(tc.b); got != tc.want {
