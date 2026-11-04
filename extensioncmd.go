@@ -82,6 +82,9 @@ func extensionCmd(args []string, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stderr, "Removed the native messaging host for %s.\n", b.Title())
+		for _, a := range res.Also {
+			fmt.Fprintln(stderr, a)
+		}
 		printSteps(stderr, res.Steps)
 		return nil
 	}
@@ -97,6 +100,9 @@ func extensionCmd(args []string, stderr io.Writer) error {
 	fmt.Fprintf(stderr, "Native messaging host for %s: %s\n", b.Title(), q(res.HostManifest))
 	if res.RegistryKey != "" {
 		fmt.Fprintf(stderr, "Registered under HKEY_CURRENT_USER\\%s\n", res.RegistryKey)
+	}
+	for _, a := range res.Also {
+		fmt.Fprintln(stderr, a)
 	}
 	fmt.Fprintf(stderr, "It starts: %s\n", q(in.Exe))
 	switch {

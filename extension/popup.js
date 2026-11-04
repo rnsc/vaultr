@@ -99,7 +99,8 @@ function errorText(err) {
       return (
         "vaultr is not set up for this browser. Run `vaultr extension install --browser " +
         browserName() +
-        "` in a terminal, then open vaultr again."
+        "` in a terminal, then open vaultr again." +
+        (err.detail ? " (The browser said: " + err.detail + ")" : "")
       );
     case "not_logged_in":
       return "Not logged in to Vault.";

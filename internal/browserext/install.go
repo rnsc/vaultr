@@ -125,7 +125,10 @@ type Result struct {
 	RegistryKey  string // Windows
 	ExtensionDir string // unpacked extension, if written
 	XPI          string // signed add-on, if written
-	Steps        []string
+	// Also: other copies of the host manifest written, or kept on
+	// uninstall, with why.
+	Also  []string
+	Steps []string
 }
 
 // Install writes the host manifest (and registers it on Windows) and the
@@ -139,9 +142,15 @@ func (in *Installer) Install(b Browser) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	res.HostManifest = in.Env.HostManifestPath(b)
-	if err := writeFile(res.HostManifest, hm); err != nil {
-		return res, err
+	paths := in.Env.HostManifestPaths(b)
+	res.HostManifest = paths[0]
+	for i, p := range paths {
+		if err := writeFile(p, hm); err != nil {
+			return res, err
+		}
+		if i > 0 {
+			res.Also = append(res.Also, "Also written to "+Quote(in.Env.GOOS, p)+": "+b.Title()+" sometimes looks there.")
+		}
 	}
 	if in.Env.GOOS == "windows" {
 		res.RegistryKey = RegistryKey(b)
@@ -236,8 +245,25 @@ func Quote(goos, p string) string {
 func (in *Installer) Uninstall(b Browser) (Result, error) {
 	var res Result
 	res.HostManifest = in.Env.HostManifestPath(b)
-	if err := os.Remove(res.HostManifest); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return res, err
+	keep := false
+	if b == Chrome && in.Env.GOOS == "darwin" {
+		// Brave on macOS may read this copy (see HostManifestPaths).
+		if _, err := os.Stat(in.Env.HostManifestPath(Brave)); err == nil {
+			keep = true
+			res.Also = append(res.Also, "Kept "+Quote(in.Env.GOOS, res.HostManifest)+": vaultr is still set up for Brave, which may read it.")
+		}
+	}
+	if !keep {
+		if err := os.Remove(res.HostManifest); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return res, err
+		}
+	}
+	for _, p := range in.Env.HostManifestPaths(b)[1:] {
+		// The copy in another browser's folder may be that browser's own
+		// install: leave it, and say how to remove it.
+		if _, err := os.Stat(p); err == nil {
+			res.Also = append(res.Also, "Left "+Quote(in.Env.GOOS, p)+", which Google Chrome uses too: vaultr extension uninstall --browser chrome removes it.")
+		}
 	}
 	if in.Env.GOOS == "windows" && in.Registry != nil {
 		res.RegistryKey = RegistryKey(b)

@@ -298,6 +298,10 @@ Where the files go:
 | Linux | `~/.local/share/vaultr/extension/` | `~/.config/<browser>/NativeMessagingHosts/` (Firefox: `~/.mozilla/native-messaging-hosts/`) |
 | Windows | `%LOCALAPPDATA%\vaultr\extension\` | `%LOCALAPPDATA%\vaultr\NativeMessagingHosts\<browser>\`, registered under `HKEY_CURRENT_USER\Software\<browser>\NativeMessagingHosts\be.rnsc.vaultr` |
 
+On macOS, `--browser brave` also writes the host manifest to Google
+Chrome's folder: Brave has been seen looking there instead of its own.
+It only allows vaultr's extension, so Chrome is unaffected.
+
 The host manifest points to the `vaultr` on your `PATH` when that is the
 binary you ran, so a Homebrew upgrade (which moves the binary to a new
 versioned folder) doesn't break it. `--path` sets another one.

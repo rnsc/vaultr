@@ -204,6 +204,18 @@ func (e Env) HostManifestPath(b Browser) string {
 	return e.join(e.linuxConfig(), dir, "NativeMessagingHosts", file)
 }
 
+// HostManifestPaths lists where b's host manifest is written, b's own
+// location first. Brave on macOS has been seen reading Google Chrome's
+// folder instead of its own (brave/brave-browser#5074, and a user of
+// vaultr 0.12.1), so it gets a copy there too.
+func (e Env) HostManifestPaths(b Browser) []string {
+	paths := []string{e.HostManifestPath(b)}
+	if b == Brave && e.GOOS == "darwin" {
+		paths = append(paths, e.HostManifestPath(Chrome))
+	}
+	return paths
+}
+
 // RegistryKey is the key under HKEY_CURRENT_USER whose default value
 // points Windows browsers to the host manifest.
 func RegistryKey(b Browser) string {

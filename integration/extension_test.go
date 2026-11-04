@@ -385,9 +385,9 @@ func TestExtensionPopupStates(t *testing.T) {
 	}
 	t.Run("host not installed", func(t *testing.T) {
 		t.Parallel()
-		tab := popupTab(t, `window.answer = (m) => m.type === "hello" ? { error: { code: "no_host", message: "x" } } : window.base(m);`)
+		tab := popupTab(t, `window.answer = (m) => m.type === "hello" ? { error: { code: "no_host", message: "x", detail: "Specified native messaging host not found." } } : window.base(m);`)
 		waitJS(t, tab, `!document.getElementById("message").hidden`)
-		if s := text(tab, "message"); !strings.Contains(s, "vaultr extension install --browser ") {
+		if s := text(tab, "message"); !strings.Contains(s, "vaultr extension install --browser ") || !strings.Contains(s, "The browser said: Specified native messaging host not found.") {
 			t.Errorf("message %q", s)
 		}
 	})

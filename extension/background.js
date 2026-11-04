@@ -47,10 +47,12 @@ function connect() {
   p.onMessage.addListener(onHostMessage);
   p.onDisconnect.addListener((dp) => {
     const err = (dp && dp.error) || ext.runtime.lastError;
-    const msg = disconnectMessage(err && err.message);
+    const raw = (err && err.message) || "";
+    const msg = disconnectMessage(raw);
     const code = /not set up/.test(msg) ? "no_host" : "host";
     if (port === p) port = null;
-    for (const call of pending.values()) call.reject({ code: code, message: msg });
+    // detail: the browser's own words, for when our reading of them is wrong.
+    for (const call of pending.values()) call.reject({ code: code, message: msg, detail: raw });
     pending.clear();
   });
   port = p;
@@ -201,7 +203,14 @@ ext.runtime.onConnect.addListener((p) => {
     };
     fromPopup(msg, reply).then(
       (result) => reply({ result: result === undefined ? null : result }),
-      (err) => reply({ error: { code: (err && err.code) || "error", message: (err && err.message) || String(err) } }),
+      (err) =>
+        reply({
+          error: {
+            code: (err && err.code) || "error",
+            message: (err && err.message) || String(err),
+            detail: (err && err.detail) || "",
+          },
+        }),
     );
   });
 });

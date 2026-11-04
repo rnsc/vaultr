@@ -435,3 +435,55 @@ func TestInstallCopiesWhatToPick(t *testing.T) {
 		t.Errorf("firefox steps lack the open command:\n%s", steps)
 	}
 }
+
+// Brave on macOS may read Google Chrome's folder: install writes both,
+// and uninstalling either leaves what the other still needs.
+func TestBraveOnMacAlsoWritesChromesFolder(t *testing.T) {
+	env := Env{GOOS: "darwin", Home: t.TempDir()}
+	if got := env.HostManifestPaths(Brave); len(got) != 2 || got[1] != env.HostManifestPath(Chrome) {
+		t.Fatalf("brave on macOS: %q", got)
+	}
+	for _, e := range []Env{{GOOS: "linux", Home: "/h"}, {GOOS: "windows", Home: `C:\h`}} {
+		if got := e.HostManifestPaths(Brave); len(got) != 1 {
+			t.Errorf("brave on %s: %q", e.GOOS, got)
+		}
+	}
+	if got := env.HostManifestPaths(Chrome); len(got) != 1 {
+		t.Errorf("chrome: %q", got)
+	}
+
+	in := &Installer{Env: env, Exe: "/opt/homebrew/bin/vaultr", Files: extension.Files}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	brave, chrome := env.HostManifestPath(Brave), env.HostManifestPath(Chrome)
+
+	res, err := in.Install(Brave)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(brave) || !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "Also written to") {
+		t.Fatalf("install: brave %v chrome %v, %q", exists(brave), exists(chrome), res.Also)
+	}
+	// Uninstalling Chrome keeps the copy Brave reads.
+	res, err = in.Uninstall(Chrome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "Kept") {
+		t.Errorf("uninstall chrome: chrome %v, %q", exists(chrome), res.Also)
+	}
+	// Uninstalling Brave removes its own and says how to remove the other.
+	res, err = in.Uninstall(Brave)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists(brave) || !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "--browser chrome") {
+		t.Errorf("uninstall brave: brave %v chrome %v, %q", exists(brave), exists(chrome), res.Also)
+	}
+	// With Brave gone, uninstalling Chrome removes it.
+	if _, err := in.Uninstall(Chrome); err != nil {
+		t.Fatal(err)
+	}
+	if exists(chrome) {
+		t.Error("chrome's manifest left after both uninstalls")
+	}
+}
