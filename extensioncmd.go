@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/atotto/clipboard"
+
 	"github.com/rnsc/vaultr/extension"
 	"github.com/rnsc/vaultr/internal/browserext"
 	"github.com/rnsc/vaultr/internal/config"
@@ -72,6 +74,7 @@ func extensionCmd(args []string, stderr io.Writer) error {
 		Files:    extension.Files,
 		XPI:      extension.SignedXPI(),
 		Registry: browserext.SystemRegistry(),
+		Copy:     copyPath,
 	}
 	if sub == "uninstall" {
 		res, err := in.Uninstall(b)
@@ -90,16 +93,17 @@ func extensionCmd(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stderr, "Native messaging host for %s: %s\n", b.Title(), res.HostManifest)
+	q := func(p string) string { return browserext.Quote(runtime.GOOS, p) }
+	fmt.Fprintf(stderr, "Native messaging host for %s: %s\n", b.Title(), q(res.HostManifest))
 	if res.RegistryKey != "" {
 		fmt.Fprintf(stderr, "Registered under HKEY_CURRENT_USER\\%s\n", res.RegistryKey)
 	}
-	fmt.Fprintf(stderr, "It starts: %s\n", in.Exe)
+	fmt.Fprintf(stderr, "It starts: %s\n", q(in.Exe))
 	switch {
 	case res.XPI != "":
-		fmt.Fprintf(stderr, "Signed add-on: %s\n", res.XPI)
+		fmt.Fprintf(stderr, "Signed add-on: %s\n", q(res.XPI))
 	case res.ExtensionDir != "":
-		fmt.Fprintf(stderr, "Extension files: %s\n", res.ExtensionDir)
+		fmt.Fprintf(stderr, "Extension files: %s\n", q(res.ExtensionDir))
 	}
 	printSteps(stderr, res.Steps)
 	for _, w := range configWarnings() {
@@ -183,3 +187,7 @@ func defaultConfigWithoutEnv() string {
 	}()
 	return config.DefaultPath()
 }
+
+// copyPath puts a path on the clipboard, for the browser's file picker.
+// Swappable in tests, which must not touch the real clipboard.
+var copyPath = clipboard.WriteAll

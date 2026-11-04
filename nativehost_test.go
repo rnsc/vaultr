@@ -78,6 +78,10 @@ func installEnv(t *testing.T) string {
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	// Never the real clipboard.
+	orig := copyPath
+	copyPath = func(string) error { return errors.New("no clipboard in tests") }
+	t.Cleanup(func() { copyPath = orig })
 	exe := filepath.Join(home, "bin", "vaultr")
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 		t.Fatal(err)

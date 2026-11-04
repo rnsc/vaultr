@@ -114,6 +114,9 @@ type Installer struct {
 	XPI     []byte // signed Firefox add-on; nil when this build has none
 	// Registry registers the host on Windows; nil elsewhere.
 	Registry Registry
+	// Copy puts the path the user has to pick in the browser on the
+	// clipboard, to paste into the file picker (nil: don't).
+	Copy func(string) error
 }
 
 // Result says what was written, and what the user does next.
@@ -152,8 +155,10 @@ func (in *Installer) Install(b Browser) (Result, error) {
 		if err := writeFile(res.XPI, in.XPI); err != nil {
 			return res, err
 		}
+		hint := in.pick(res.XPI)
 		res.Steps = []string{
-			"Open " + res.XPI + " in Firefox (drag it onto a Firefox window, or File > Open File) and click Add.",
+			"Open the add-on in Firefox and click Add. Either run " + firefoxCommand(in.Env.GOOS, res.XPI) +
+				", or drag " + Quote(in.Env.GOOS, res.XPI) + " onto a Firefox window, or use File > Open File. " + hint,
 		}
 		return res, nil
 	}
@@ -163,19 +168,67 @@ func (in *Installer) Install(b Browser) (Result, error) {
 		return res, err
 	}
 	if b == Firefox {
+		manifest := in.Env.join(res.ExtensionDir, "manifest.json")
+		hint := in.pick(manifest)
 		res.Steps = []string{
 			"This vaultr build has no signed Firefox add-on (release builds include one). To try the extension until Firefox restarts:",
 			"Open about:debugging#/runtime/this-firefox.",
-			"Click Load Temporary Add-on and pick " + in.Env.join(res.ExtensionDir, "manifest.json") + ".",
+			"Click Load Temporary Add-on and pick " + Quote(in.Env.GOOS, manifest) + ". " + hint,
 		}
 		return res, nil
 	}
+	hint := in.pick(res.ExtensionDir)
 	res.Steps = []string{
 		"Open " + b.ExtensionsPage() + " in " + b.Title() + ".",
 		"Turn on Developer mode.",
-		"Click Load unpacked and pick " + res.ExtensionDir + ". If vaultr is already listed, click its reload button instead.",
+		"Click Load unpacked and pick the folder " + Quote(in.Env.GOOS, res.ExtensionDir) + ". " + hint,
+		"If vaultr was already listed, click its reload button instead.",
 	}
 	return res, nil
+}
+
+// pick copies p to the clipboard (when it can) and says how to reach it
+// in the browser's file picker: the folders vaultr writes to are hidden
+// there on every OS (~/Library, ~/.local, AppData).
+func (in *Installer) pick(p string) string {
+	copied := in.Copy != nil && in.Copy(p) == nil
+	paste := "paste the path"
+	if copied {
+		paste = "paste the path (vaultr copied it to the clipboard)"
+	}
+	switch in.Env.GOOS {
+	case "darwin":
+		return "The picker hides ~/Library: press Cmd+Shift+G, " + paste + " and press Enter."
+	case "windows":
+		return "The picker hides AppData: " + paste + " into its address bar."
+	}
+	return "The picker hides folders starting with a dot: press Ctrl+L and " + paste + "."
+}
+
+// firefoxCommand is a shell command that opens path in Firefox.
+func firefoxCommand(goos, path string) string {
+	switch goos {
+	case "darwin":
+		return "open -a Firefox " + Quote(goos, path)
+	case "windows":
+		return "start firefox " + Quote(goos, path)
+	}
+	return "firefox " + Quote(goos, path)
+}
+
+// Quote makes a path safe to paste into a shell: macOS puts
+// "Application Support" in the way.
+func Quote(goos, p string) string {
+	if goos == "windows" {
+		if strings.ContainsAny(p, " &()^%!") {
+			return `"` + p + `"`
+		}
+		return p
+	}
+	if p != "" && !strings.ContainsAny(p, " \t'\"$`\\!*?#&;()<>|~{}[]") {
+		return p
+	}
+	return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
 }
 
 // Uninstall removes what Install wrote for b. Files shared with another

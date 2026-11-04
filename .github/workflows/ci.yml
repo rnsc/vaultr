@@ -220,7 +220,7 @@ jobs:
           cat "$RUNNER_TEMP/install.log"
           xpi="$home/.local/share/vaultr/extension/vaultr.xpi"
           cmp extension/dist/vaultr.xpi "$xpi"
-          grep -qF "Open $xpi in Firefox" "$RUNNER_TEMP/install.log"
+          grep -qF "run firefox $xpi" "$RUNNER_TEMP/install.log"
           grep -qF '"vaultr@rnsc.be"' "$home/.mozilla/native-messaging-hosts/be.rnsc.vaultr.json"
           go run . extension export --browser firefox --version v0.0.1 "$RUNNER_TEMP/src"
           go run ./tools/amo verify -xpi "$xpi" -dir "$RUNNER_TEMP/src"
