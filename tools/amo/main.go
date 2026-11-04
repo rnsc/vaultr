@@ -179,6 +179,12 @@ func (c *client) signedFile(ctx context.Context, version string) ([]byte, error)
 	return data, nil
 }
 
+// sameJSON reports whether a and b hold the same JSON value.
+func sameJSON(a, b []byte) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
+}
+
 // jsonChanges describes how got differs from want, field by field, or
 // says the difference is only in formatting. Values in the add-on's
 // manifest aren't secret.
@@ -243,7 +249,8 @@ func short(v any) string {
 }
 
 // verify checks that the .xpi holds exactly dir's files, byte for byte,
-// besides META-INF/ (the signature).
+// besides META-INF/ (the signature). JSON files only need the same JSON:
+// AMO reformats manifest.json when it signs.
 func verify(xpi, dir string) error {
 	zr, err := zip.OpenReader(xpi)
 	if err != nil {
@@ -283,14 +290,15 @@ func verify(xpi, dir string) error {
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(got, want) {
-			msg := name + ": differs"
-			if strings.HasSuffix(name, ".json") {
-				// Say what changed, so a change made by signing can be
-				// told from a wrong file.
-				msg += jsonChanges(got, want)
-			}
-			problems = append(problems, msg)
+		switch {
+		case bytes.Equal(got, want):
+		case strings.HasSuffix(name, ".json") && sameJSON(got, want):
+			// AMO rewrites manifest.json when it signs (0.12.0 lost its
+			// final newline): fine as long as the JSON is the same.
+		case strings.HasSuffix(name, ".json"):
+			problems = append(problems, name+": differs"+jsonChanges(got, want))
+		default:
+			problems = append(problems, name+": differs")
 		}
 		return nil
 	})
