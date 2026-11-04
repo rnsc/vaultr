@@ -271,11 +271,14 @@ CLI.
      (`chrome://extensions`, `brave://extensions`, `edge://extensions`),
      turn on Developer mode, click Load unpacked and pick the folder it
      names. The extension isn't in the Chrome Web Store.
-   - **Firefox:** stable Firefox only installs add-ons signed by Mozilla,
-     and vaultr doesn't ship a signed one yet. Until it does, load it for
-     the session: open `about:debugging#/runtime/this-firefox`, click
-     Load Temporary Add-on and pick the `manifest.json` it names. Firefox
-     forgets it on restart.
+   - **Firefox:** open the `.xpi` it writes in Firefox (drag it onto a
+     window, or File, Open File) and click Add. Release builds include
+     the add-on, signed by Mozilla (unlisted: it isn't on the add-ons
+     site). It is also on each release's page. A build without it (`go
+     install`, a prerelease) writes the unpacked add-on instead, which
+     stable Firefox only loads for the session: open
+     `about:debugging#/runtime/this-firefox`, click Load Temporary
+     Add-on and pick the `manifest.json` it names.
 
 After upgrading vaultr, run the install again and click the extension's
 reload button on the extensions page. The popup warns when the extension

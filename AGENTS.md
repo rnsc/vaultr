@@ -100,18 +100,18 @@ ignores `--load-extension`.
   or the demo scripts change, and committed back to the PR branch. Don't
   edit them or `demo/inputs.sha256` by hand; change `demo/*.tape`.
 
-## Firefox signing (not set up yet)
+## Firefox signing
 
-Stable Firefox installs only add-ons signed by Mozilla. The plan, once
-AMO API credentials exist (secrets `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`):
-in `release.yml`, after the version is picked and before the tag is
-pushed, run `go run . extension export --browser firefox --version $TAG
-DIR` and `npx web-ext sign --channel=unlisted --source-dir DIR`, put the
-result at `extension/dist/vaultr.xpi` (embedded by `go:embed`, gitignored)
-and add it to the release assets and `SHA256SUMS`. AMO signs a version
-once: a rerun downloads the already signed file instead. If signing
-fails, no tag is pushed. Until then `vaultr extension install --browser
-firefox` writes the unpacked add-on for about:debugging.
+Stable Firefox installs only add-ons signed by Mozilla. The release
+workflow signs each release's add-on on AMO as an unlisted add-on
+(`scripts/sign-firefox.sh`, with the `AMO_JWT_ISSUER` and
+`AMO_JWT_SECRET` secrets) before pushing the tag, so a signing failure
+releases nothing. The signed file goes to `extension/dist/vaultr.xpi`
+(gitignored), which `go:embed` puts in the binary, and is attached to the
+release with its checksum. AMO signs a version once: a rerun downloads
+the already signed file (`tools/amo`), and either way it must hold
+exactly the files exported from the release commit. Prereleases get no
+signed add-on.
 
 ## Writing style
 
