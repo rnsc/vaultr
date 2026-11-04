@@ -376,6 +376,23 @@ func TestExtensionPopupEscape(t *testing.T) {
 	waitJS(t, tab, `window.didClose`)
 }
 
+// The search box has focus at once, before vaultr answers, and what is
+// typed meanwhile is searched.
+func TestExtensionPopupFocusesAtOnce(t *testing.T) {
+	t.Parallel()
+	tab := popupTab(t, `
+let release;
+const held = new Promise((r) => (release = r));
+window.release = () => release();
+window.answer = (m) => (m.type === "hello" ? held.then(() => window.base(m)) : window.base(m));`)
+	waitJS(t, tab, `document.activeElement && document.activeElement.id === "query"`)
+	if err := chromedp.Run(tab, chromedp.SendKeys("#query", "db")); err != nil {
+		t.Fatal(err)
+	}
+	evalJS(t, tab, `window.release(); true`, nil)
+	waitJS(t, tab, `window.sent.some((m) => m.type === "search" && m.params.query === "db")`)
+}
+
 func TestExtensionPopupStates(t *testing.T) {
 	t.Parallel()
 	text := func(tab context.Context, id string) string {

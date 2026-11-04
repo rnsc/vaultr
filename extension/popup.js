@@ -485,4 +485,15 @@ async function start() {
   await ready();
 }
 
+// Focus the search box as soon as the popup opens, not once vaultr has
+// answered: what is typed meanwhile is searched when it can be. Firefox
+// may ignore focus() while its popup is still opening, so try again when
+// the popup's window gets focus.
+function focusQuery() {
+  if ($("login").hidden && document.activeElement !== $("query")) $("query").focus();
+}
+focusQuery();
+window.addEventListener("focus", focusQuery, { once: true });
+setTimeout(focusQuery, 100);
+
 start();
