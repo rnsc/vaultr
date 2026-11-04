@@ -181,8 +181,10 @@ type Info struct {
 type Backend interface {
 	Info() Info
 	// Reload re-reads the config file and ~/.vault-token, keeping a token
-	// from a login in this process when nothing is saved.
-	Reload()
+	// from a login in this process when nothing is saved. It reports
+	// whether anything that the loaded indexes depend on changed (server,
+	// namespace, token, mounts...).
+	Reload() (changed bool)
 	Status(ctx context.Context) (Status, error)
 	Namespaces(ctx context.Context) ([]string, error)
 	// Index loads namespace ns's index, or builds it when stale (always

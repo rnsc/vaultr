@@ -162,3 +162,42 @@ func TestConfigWarnings(t *testing.T) {
 		t.Error("configWarnings unset VAULTR_CONFIG")
 	}
 }
+
+// Reload reports a change only when the server, namespace or token does,
+// so reopening the popup keeps what is loaded.
+func TestHostBackendReloadChanges(t *testing.T) {
+	setEnv(t, map[string]string{"VAULT_ADDR": "", "VAULT_TOKEN": ""})
+	home := os.Getenv("HOME")
+	cfg := os.Getenv("VAULTR_CONFIG")
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(cfg, "address = \"https://vault.example\"\n")
+	write(filepath.Join(home, ".vault-token"), "hvs.one")
+	b := &hostBackend{}
+	if !b.Reload() {
+		t.Error("first load: no change reported")
+	}
+	if b.Reload() {
+		t.Error("nothing changed, but Reload says it did")
+	}
+	write(cfg, "address = \"https://vault.example\"\n[auth]\nmethod = \"oidc\"\n")
+	if b.Reload() || b.Info().AuthMethod != "oidc" {
+		t.Errorf("an [auth] change: reported as a change, or not picked up (%q)", b.Info().AuthMethod)
+	}
+	write(filepath.Join(home, ".vault-token"), "hvs.two")
+	if !b.Reload() {
+		t.Error("new token: no change reported")
+	}
+	write(cfg, "address = \"https://other.example\"\n")
+	if !b.Reload() {
+		t.Error("new address: no change reported")
+	}
+	write(cfg, "namespace = \"team-a\"\naddress = \"https://other.example\"\n")
+	if !b.Reload() {
+		t.Error("new namespace: no change reported")
+	}
+}

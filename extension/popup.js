@@ -323,6 +323,15 @@ async function loadNamespaces(configured) {
     list = []; // e.g. Vault CE: no namespaces
   }
   if (!list.includes(configured)) list.unshift(configured);
+  // The first search used the saved choice before the list came in: if
+  // that namespace is gone (or there is only one), go back to the
+  // configured one and search again.
+  const s = state.scope;
+  const valid = s.all ? list.length > 1 : s.ns === null || list.includes(s.ns);
+  if (!valid) {
+    state.scope = { all: false, ns: null };
+    search();
+  }
   if (list.length <= 1) {
     sel.hidden = true;
     return;
@@ -338,13 +347,10 @@ async function loadNamespaces(configured) {
   all.value = "all";
   all.textContent = "All namespaces";
   sel.append(all);
-  const s = savedScope();
-  if (s.all) {
-    state.scope = s;
+  if (state.scope.all) {
     sel.value = "all";
-  } else if (s.ns !== null && list.includes(s.ns)) {
-    state.scope = s;
-    sel.value = "ns:" + s.ns;
+  } else if (state.scope.ns !== null) {
+    sel.value = "ns:" + state.scope.ns;
   } else {
     sel.value = "ns:" + configured;
   }
@@ -428,12 +434,15 @@ async function shortcut() {
   note($("shortcut"), "No shortcut set (" + where + ")");
 }
 
-// ready runs once vaultr answers and the user is logged in.
+// ready runs once vaultr answers and the user is logged in. It searches
+// at once with the namespace picked last time, and fills the namespace
+// picker after: listing namespaces asks Vault, the search often doesn't.
 async function ready() {
-  const configured = state.hello.namespace;
-  await loadNamespaces(configured);
-  $("query").focus();
-  await search();
+  state.scope = savedScope();
+  focusQuery();
+  const first = search();
+  await loadNamespaces(state.hello.namespace);
+  await first;
 }
 
 async function start() {

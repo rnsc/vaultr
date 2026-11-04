@@ -34,6 +34,8 @@ type fakeBackend struct {
 	indexErr  error
 	block     chan struct{} // Index waits on it (or ctx) when set
 	namespace []string
+	changed   bool // what the next Reload reports
+	nsCalls   int
 }
 
 func newFake() *fakeBackend {
@@ -57,7 +59,14 @@ func newFake() *fakeBackend {
 }
 
 func (f *fakeBackend) Info() Info { f.mu.Lock(); defer f.mu.Unlock(); return f.info }
-func (f *fakeBackend) Reload()    { f.mu.Lock(); f.reloads++; f.mu.Unlock() }
+func (f *fakeBackend) Reload() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reloads++
+	changed := f.changed
+	f.changed = false
+	return changed
+}
 
 func (f *fakeBackend) Status(context.Context) (Status, error) {
 	if !f.loggedIn {
@@ -66,7 +75,12 @@ func (f *fakeBackend) Status(context.Context) (Status, error) {
 	return Status{LoggedIn: true, TTL: 3600, AuthMethod: f.info.AuthMethod}, nil
 }
 
-func (f *fakeBackend) Namespaces(context.Context) ([]string, error) { return f.namespace, nil }
+func (f *fakeBackend) Namespaces(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nsCalls++
+	return f.namespace, nil
+}
 
 func (f *fakeBackend) entries(ns string) []index.Entry {
 	var out []index.Entry
@@ -621,5 +635,37 @@ func TestWriterReplacesOversizedResponses(t *testing.T) {
 	_ = json.Unmarshal(b, &m)
 	if m.ID != 3 || m.Error == nil || m.Error.Code != CodeTooLarge {
 		t.Errorf("got %s", b)
+	}
+}
+
+// Opening the popup again (hello) keeps the loaded index and namespace
+// list, unless the config or token changed.
+func TestHelloKeepsWhatIsLoaded(t *testing.T) {
+	f := newFake()
+	h := &Handler{Backend: f}
+	hi := Request{ID: 1, Type: "hello", Protocol: Protocol}
+	mustOK[HelloResult](t, do(t, h, hi))
+	mustOK[SearchResult](t, do(t, h, Request{ID: 2, Type: "search", Query: "db"}))
+	mustOK[NamespacesResult](t, do(t, h, Request{ID: 3, Type: "namespaces"}))
+	for i := range 3 {
+		mustOK[HelloResult](t, do(t, h, hi))
+		mustOK[SearchResult](t, do(t, h, Request{ID: int64(10 + i), Type: "search", Query: "api"}))
+		mustOK[NamespacesResult](t, do(t, h, Request{ID: int64(20 + i), Type: "namespaces"}))
+	}
+	if len(f.indexed) != 1 || f.nsCalls != 1 {
+		t.Errorf("unchanged setup: index loaded %d times, namespaces listed %d times; want 1 and 1", len(f.indexed), f.nsCalls)
+	}
+	f.changed = true
+	mustOK[HelloResult](t, do(t, h, hi))
+	mustOK[SearchResult](t, do(t, h, Request{ID: 30, Type: "search", Query: "db"}))
+	mustOK[NamespacesResult](t, do(t, h, Request{ID: 31, Type: "namespaces"}))
+	if len(f.indexed) != 2 || f.nsCalls != 2 {
+		t.Errorf("changed setup: index loaded %d times, namespaces listed %d times; want 2 and 2", len(f.indexed), f.nsCalls)
+	}
+	// A refresh lists namespaces again too.
+	mustOK[RefreshResult](t, do(t, h, Request{ID: 32, Type: "refresh"}))
+	mustOK[NamespacesResult](t, do(t, h, Request{ID: 33, Type: "namespaces"}))
+	if f.nsCalls != 3 {
+		t.Errorf("after refresh: namespaces listed %d times, want 3", f.nsCalls)
 	}
 }
