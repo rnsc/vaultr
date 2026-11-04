@@ -370,3 +370,120 @@ func TestStableExecutable(t *testing.T) {
 		}
 	}
 }
+
+func TestQuote(t *testing.T) {
+	for _, tc := range []struct{ goos, in, want string }{
+		{"darwin", "/Users/u/Library/Application Support/vaultr/extension/chromium", "'/Users/u/Library/Application Support/vaultr/extension/chromium'"},
+		{"linux", "/home/u/.local/share/vaultr/extension/chromium", "/home/u/.local/share/vaultr/extension/chromium"},
+		{"linux", "/home/o'brien/x", `'/home/o'\''brien/x'`},
+		{"windows", `C:\Users\u\AppData\Local\vaultr\extension\chromium`, `C:\Users\u\AppData\Local\vaultr\extension\chromium`},
+		{"windows", `C:\Users\Jane Doe\AppData\Local\vaultr`, `"C:\Users\Jane Doe\AppData\Local\vaultr"`},
+	} {
+		if got := Quote(tc.goos, tc.in); got != tc.want {
+			t.Errorf("%s %q: %s, want %s", tc.goos, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestPickerHints(t *testing.T) {
+	var copied []string
+	for goos, want := range map[string]string{
+		"darwin":  "Cmd+Shift+G",
+		"linux":   "Ctrl+L",
+		"windows": "address bar",
+	} {
+		in := &Installer{Env: Env{GOOS: goos}, Copy: func(p string) error { copied = append(copied, p); return nil }}
+		if h := in.pick("/x"); !strings.Contains(h, want) || !strings.Contains(h, "copied it to the clipboard") {
+			t.Errorf("%s: %q", goos, h)
+		}
+		in.Copy = func(string) error { return errors.New("no clipboard") }
+		if h := in.pick("/x"); strings.Contains(h, "copied") {
+			t.Errorf("%s without a clipboard: %q", goos, h)
+		}
+	}
+	if len(copied) != 3 || copied[0] != "/x" {
+		t.Errorf("copied %q", copied)
+	}
+	for goos, want := range map[string]string{
+		"darwin":  "open -a Firefox '/a b/vaultr.xpi'",
+		"linux":   "firefox '/a b/vaultr.xpi'",
+		"windows": `start firefox "/a b/vaultr.xpi"`,
+	} {
+		if got := firefoxCommand(goos, "/a b/vaultr.xpi"); got != want {
+			t.Errorf("%s: %s", goos, got)
+		}
+	}
+}
+
+func TestInstallCopiesWhatToPick(t *testing.T) {
+	in, _ := testInstaller(t)
+	var copied []string
+	in.Copy = func(p string) error { copied = append(copied, p); return nil }
+	res, err := in.Install(Brave)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.XPI = []byte("PK")
+	ff, err := in.Install(Firefox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 2 || copied[0] != res.ExtensionDir || copied[1] != ff.XPI {
+		t.Errorf("copied %q, want the extension folder, then the .xpi", copied)
+	}
+	if steps := strings.Join(ff.Steps, "\n"); !strings.Contains(steps, firefoxCommand(runtime.GOOS, ff.XPI)) {
+		t.Errorf("firefox steps lack the open command:\n%s", steps)
+	}
+}
+
+// Brave on macOS may read Google Chrome's folder: install writes both,
+// and uninstalling either leaves what the other still needs.
+func TestBraveOnMacAlsoWritesChromesFolder(t *testing.T) {
+	env := Env{GOOS: "darwin", Home: t.TempDir()}
+	if got := env.HostManifestPaths(Brave); len(got) != 2 || got[1] != env.HostManifestPath(Chrome) {
+		t.Fatalf("brave on macOS: %q", got)
+	}
+	for _, e := range []Env{{GOOS: "linux", Home: "/h"}, {GOOS: "windows", Home: `C:\h`}} {
+		if got := e.HostManifestPaths(Brave); len(got) != 1 {
+			t.Errorf("brave on %s: %q", e.GOOS, got)
+		}
+	}
+	if got := env.HostManifestPaths(Chrome); len(got) != 1 {
+		t.Errorf("chrome: %q", got)
+	}
+
+	in := &Installer{Env: env, Exe: "/opt/homebrew/bin/vaultr", Files: extension.Files}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	brave, chrome := env.HostManifestPath(Brave), env.HostManifestPath(Chrome)
+
+	res, err := in.Install(Brave)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(brave) || !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "Also written to") {
+		t.Fatalf("install: brave %v chrome %v, %q", exists(brave), exists(chrome), res.Also)
+	}
+	// Uninstalling Chrome keeps the copy Brave reads.
+	res, err = in.Uninstall(Chrome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "Kept") {
+		t.Errorf("uninstall chrome: chrome %v, %q", exists(chrome), res.Also)
+	}
+	// Uninstalling Brave removes its own and says how to remove the other.
+	res, err = in.Uninstall(Brave)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists(brave) || !exists(chrome) || len(res.Also) != 1 || !strings.Contains(res.Also[0], "--browser chrome") {
+		t.Errorf("uninstall brave: brave %v chrome %v, %q", exists(brave), exists(chrome), res.Also)
+	}
+	// With Brave gone, uninstalling Chrome removes it.
+	if _, err := in.Uninstall(Chrome); err != nil {
+		t.Fatal(err)
+	}
+	if exists(chrome) {
+		t.Error("chrome's manifest left after both uninstalls")
+	}
+}

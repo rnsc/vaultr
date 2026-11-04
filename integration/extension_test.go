@@ -376,6 +376,49 @@ func TestExtensionPopupEscape(t *testing.T) {
 	waitJS(t, tab, `window.didClose`)
 }
 
+// The search box has focus at once, before vaultr answers, and what is
+// typed meanwhile is searched.
+func TestExtensionPopupFocusesAtOnce(t *testing.T) {
+	t.Parallel()
+	tab := popupTab(t, `
+let release;
+const held = new Promise((r) => (release = r));
+window.release = () => release();
+window.answer = (m) => (m.type === "hello" ? held.then(() => window.base(m)) : window.base(m));`)
+	waitJS(t, tab, `document.activeElement && document.activeElement.id === "query"`)
+	if err := chromedp.Run(tab, chromedp.SendKeys("#query", "db")); err != nil {
+		t.Fatal(err)
+	}
+	evalJS(t, tab, `window.release(); true`, nil)
+	waitJS(t, tab, `window.sent.some((m) => m.type === "search" && m.params.query === "db")`)
+}
+
+// The first search goes out before the namespace list is asked for (which
+// takes Vault round trips), with the namespace picked last time; if that
+// namespace is gone, the popup searches the configured one again.
+func TestExtensionPopupSearchesBeforeListingNamespaces(t *testing.T) {
+	t.Parallel()
+	tab := popupTab(t, `localStorage.setItem("vaultr.scope", JSON.stringify({ all: false, ns: "team-a" }));`)
+	waitJS(t, tab, `window.sent.some((m) => m.type === "namespaces") && document.querySelectorAll("#results li").length === 3`)
+	var order string
+	evalJS(t, tab, `window.sent.filter((m) => m.op === "host" && (m.type === "search" || m.type === "namespaces")).map((m) => m.type + ":" + (m.params.namespace || "")).join(",")`, &order)
+	if !strings.HasPrefix(order, "search:team-a,namespaces:") {
+		t.Errorf("order %q, want the team-a search before the namespace list", order)
+	}
+
+	tab = popupTab(t, `localStorage.setItem("vaultr.scope", JSON.stringify({ all: false, ns: "gone" }));`)
+	waitJS(t, tab, `window.sent.filter((m) => m.type === "search").length >= 2`)
+	evalJS(t, tab, `window.sent.filter((m) => m.type === "search").map((m) => m.params.namespace === undefined ? "configured" : m.params.namespace).join(",")`, &order)
+	if order != "gone,configured" {
+		t.Errorf("searches %q, want the saved namespace, then the configured one", order)
+	}
+	var sel string
+	evalJS(t, tab, `document.getElementById("namespace").value`, &sel)
+	if sel != "ns:" {
+		t.Errorf("picker shows %q, want the configured namespace", sel)
+	}
+}
+
 func TestExtensionPopupStates(t *testing.T) {
 	t.Parallel()
 	text := func(tab context.Context, id string) string {
@@ -385,9 +428,9 @@ func TestExtensionPopupStates(t *testing.T) {
 	}
 	t.Run("host not installed", func(t *testing.T) {
 		t.Parallel()
-		tab := popupTab(t, `window.answer = (m) => m.type === "hello" ? { error: { code: "no_host", message: "x" } } : window.base(m);`)
+		tab := popupTab(t, `window.answer = (m) => m.type === "hello" ? { error: { code: "no_host", message: "x", detail: "Specified native messaging host not found." } } : window.base(m);`)
 		waitJS(t, tab, `!document.getElementById("message").hidden`)
-		if s := text(tab, "message"); !strings.Contains(s, "vaultr extension install --browser ") {
+		if s := text(tab, "message"); !strings.Contains(s, "vaultr extension install --browser ") || !strings.Contains(s, "The browser said: Specified native messaging host not found.") {
 			t.Errorf("message %q", s)
 		}
 	})

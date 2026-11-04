@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -68,19 +69,39 @@ type hostBackend struct {
 	loginToken, loginNS string
 }
 
-func (b *hostBackend) Reload() {
+func (b *hostBackend) Reload() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.subs = nil
 	a, err := newApp(false, nil)
 	if err != nil {
-		b.a, b.err = nil, err
-		return
+		changed := b.err == nil || b.err.Error() != err.Error()
+		b.a, b.err, b.subs = nil, err, nil
+		return changed
 	}
 	if b.loginToken != "" && !a.settings.Auth.SaveToken {
 		a.client.SetToken(b.loginToken, b.loginNS)
 	}
-	b.a, b.err = a, nil
+	if b.a != nil && sameSetup(b.a, a) {
+		// Keep the current app: its stores hold the loaded caches (and
+		// their recent lists), its client what it learned about the token.
+		// Only the settings that don't touch the index are refreshed.
+		b.a.settings.Auth = a.settings.Auth
+		return false
+	}
+	b.a, b.err, b.subs = a, nil, nil
+	return true
+}
+
+// sameSetup reports whether two apps would load the same indexes from the
+// same server with the same token.
+func sameSetup(x, y *app) bool {
+	key := func(a *app) any {
+		s := a.settings
+		return []any{a.client.Addr, a.client.Namespace, a.client.Token(), s.Vault.TokenNamespace,
+			s.Vault.CACert, s.Vault.ClientCert, s.Vault.ClientKey, s.Vault.SkipVerify,
+			s.Mounts, s.PathsOnly, s.MaxAge, s.CacheDir, s.Workers}
+	}
+	return reflect.DeepEqual(key(x), key(y))
 }
 
 func (b *hostBackend) app() (*app, error) {

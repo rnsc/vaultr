@@ -78,6 +78,10 @@ func installEnv(t *testing.T) string {
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	// Never the real clipboard.
+	orig := copyPath
+	copyPath = func(string) error { return errors.New("no clipboard in tests") }
+	t.Cleanup(func() { copyPath = orig })
 	exe := filepath.Join(home, "bin", "vaultr")
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 		t.Fatal(err)
@@ -156,5 +160,45 @@ func TestConfigWarnings(t *testing.T) {
 	}
 	if os.Getenv("VAULTR_CONFIG") == "" {
 		t.Error("configWarnings unset VAULTR_CONFIG")
+	}
+}
+
+// Reload reports a change only when the server, namespace or token does,
+// so reopening the popup keeps what is loaded.
+func TestHostBackendReloadChanges(t *testing.T) {
+	setEnv(t, map[string]string{"VAULT_ADDR": "", "VAULT_TOKEN": ""})
+	home := os.Getenv("HOME")
+	t.Setenv("USERPROFILE", home) // where Windows looks for ~/.vault-token
+	cfg := os.Getenv("VAULTR_CONFIG")
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(cfg, "address = \"https://vault.example\"\n")
+	write(filepath.Join(home, ".vault-token"), "hvs.one")
+	b := &hostBackend{}
+	if !b.Reload() {
+		t.Error("first load: no change reported")
+	}
+	if b.Reload() {
+		t.Error("nothing changed, but Reload says it did")
+	}
+	write(cfg, "address = \"https://vault.example\"\n[auth]\nmethod = \"oidc\"\n")
+	if b.Reload() || b.Info().AuthMethod != "oidc" {
+		t.Errorf("an [auth] change: reported as a change, or not picked up (%q)", b.Info().AuthMethod)
+	}
+	write(filepath.Join(home, ".vault-token"), "hvs.two")
+	if !b.Reload() {
+		t.Error("new token: no change reported")
+	}
+	write(cfg, "address = \"https://other.example\"\n")
+	if !b.Reload() {
+		t.Error("new address: no change reported")
+	}
+	write(cfg, "namespace = \"team-a\"\naddress = \"https://other.example\"\n")
+	if !b.Reload() {
+		t.Error("new namespace: no change reported")
 	}
 }

@@ -270,9 +270,12 @@ CLI.
    - **Chrome, Chromium, Brave, Edge:** open the extensions page
      (`chrome://extensions`, `brave://extensions`, `edge://extensions`),
      turn on Developer mode, click Load unpacked and pick the folder it
-     names. The extension isn't in the Chrome Web Store.
-   - **Firefox:** open the `.xpi` it writes in Firefox (drag it onto a
-     window, or File, Open File) and click Add. Release builds include
+     names. The extension isn't in the Chrome Web Store. The folder is
+     hidden in the file picker (`~/Library` on macOS); vaultr copies its
+     path to the clipboard, to paste after `Cmd+Shift+G` on macOS,
+     `Ctrl+L` on Linux, or into the address bar on Windows.
+   - **Firefox:** open the `.xpi` it writes in Firefox and click Add. It
+     prints the command that does it (`open -a Firefox ...` on macOS). Release builds include
      the add-on, signed by Mozilla (unlisted: it isn't on the add-ons
      site). It is also on each release's page. A build without it (`go
      install`, a prerelease) writes the unpacked add-on instead, which
@@ -294,6 +297,10 @@ Where the files go:
 | macOS | `~/Library/Application Support/vaultr/extension/` | `~/Library/Application Support/<browser>/NativeMessagingHosts/be.rnsc.vaultr.json` |
 | Linux | `~/.local/share/vaultr/extension/` | `~/.config/<browser>/NativeMessagingHosts/` (Firefox: `~/.mozilla/native-messaging-hosts/`) |
 | Windows | `%LOCALAPPDATA%\vaultr\extension\` | `%LOCALAPPDATA%\vaultr\NativeMessagingHosts\<browser>\`, registered under `HKEY_CURRENT_USER\Software\<browser>\NativeMessagingHosts\be.rnsc.vaultr` |
+
+On macOS, `--browser brave` also writes the host manifest to Google
+Chrome's folder: Brave has been seen looking there instead of its own.
+It only allows vaultr's extension, so Chrome is unaffected.
 
 The host manifest points to the `vaultr` on your `PATH` when that is the
 binary you ran, so a Homebrew upgrade (which moves the binary to a new

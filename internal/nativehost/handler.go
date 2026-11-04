@@ -39,6 +39,9 @@ type Handler struct {
 
 	mu     sync.Mutex
 	loaded map[string]*loadedIndex
+	// The namespace list, kept like the indexes: listing namespaces asks
+	// Vault, once per level of nesting.
+	nsList []string
 }
 
 type loadedIndex struct {
@@ -206,8 +209,12 @@ func (h *Handler) handle(ctx context.Context, req Request, event func(any)) Resp
 }
 
 func (h *Handler) hello(req Request) Response {
-	h.Backend.Reload()
-	h.forget()
+	// Every popup opens with hello. Keep what is loaded unless the
+	// config or token changed: reloading the index costs a trip to Vault
+	// (the cache key), and that was most of the wait when opening.
+	if h.Backend.Reload() {
+		h.forget()
+	}
 	info := h.Backend.Info()
 	if req.Protocol != Protocol {
 		fix := "update the extension: run `vaultr extension install`, then reload it"
@@ -274,11 +281,13 @@ func problem(info Info) *Error {
 		info.ConfigPath)}
 }
 
-// forget drops the loaded indexes, after a login or a config reload.
+// forget drops the loaded indexes and namespace list, after a login or a
+// config change.
 func (h *Handler) forget() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.loaded = nil
+	h.nsList = nil
 }
 
 // namespace resolves a request's namespace.
@@ -290,12 +299,20 @@ func (h *Handler) namespace(req Request) string {
 }
 
 func (h *Handler) namespaces(ctx context.Context) (NamespacesResult, error) {
-	list, err := h.Backend.Namespaces(ctx)
-	if err != nil {
-		return NamespacesResult{}, err
-	}
+	h.mu.Lock()
+	list := h.nsList
+	h.mu.Unlock()
 	if list == nil {
-		list = []string{}
+		var err error
+		if list, err = h.Backend.Namespaces(ctx); err != nil {
+			return NamespacesResult{}, err
+		}
+		if list == nil {
+			list = []string{}
+		}
+		h.mu.Lock()
+		h.nsList = list
+		h.mu.Unlock()
 	}
 	return NamespacesResult{Namespaces: list, Configured: h.Backend.Info().Namespace}, nil
 }
@@ -435,6 +452,9 @@ func withRecent(rows []search.Row, recent []string) ([]search.Row, int) {
 }
 
 func (h *Handler) refresh(ctx context.Context, req Request, event func(any)) (RefreshResult, error) {
+	h.mu.Lock()
+	h.nsList = nil // a refresh also finds namespaces added since
+	h.mu.Unlock()
 	li, err := h.index(ctx, h.namespace(req), req.AllNamespaces, true, event)
 	if err != nil {
 		return RefreshResult{}, err
