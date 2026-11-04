@@ -12,6 +12,7 @@ when you ask for them.
 - **Instant search**: all terms must match a path or a key name. `k:` / `p:` limit a term to keys or paths.
 - **TUI** for browsing and copying. The **CLI** (`find`, `get`) works for scripts and pipes.
 - **Encrypted, time-bombed local cache** holding paths and key names only. It never stores values.
+- **Browser extension** that fills the focused form field with a value, through the vaultr binary.
 
 ## Install
 
@@ -225,6 +226,118 @@ thousand secrets.
 Copying uses the system clipboard (pbcopy, xclip, xsel, wl-copy). If none is
 available it falls back to OSC 52, which works over SSH in most terminals.
 Values copied to the system clipboard are cleared after 45s if still there.
+
+## Browser extension
+
+The extension fills the field you clicked into on a web page with a value
+from Vault. Click into a username or password field, press `Alt+Shift+V`
+(or click the vaultr icon), search, and pick a key: the field gets that
+key's value. It fills one field at a time, so a login form takes two
+picks. It doesn't guess which key is a username or a password, because
+Vault layouts differ too much for that.
+
+It works in Chrome, Chromium, Brave, Edge and Firefox, on macOS, Linux
+and Windows.
+
+### How it works
+
+The extension never talks to Vault and never sees your token. The browser
+starts `vaultr` and talks to it over stdin and stdout (native messaging).
+vaultr does the work with the same config, login, index and search as the
+CLI.
+
+- Search results hold paths and key names only.
+- A value is read from Vault only when you pick a key, one key at a time.
+  It goes from vaultr to the extension's background script and straight
+  into the page. The popup never receives it.
+- The extension asks for `activeTab`, `scripting` and `nativeMessaging`
+  only. It runs nothing on web pages until you open it, and then only on
+  the tab you opened it on.
+- Only vaultr's own extension may start vaultr: the host manifest names
+  its ID.
+
+### Setting it up
+
+1. Put your settings in `~/.config/vaultr/config.toml` (`vaultr config
+   init` writes a template). The browser starts vaultr without your
+   shell's environment, so `VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`
+   and the other variables are not set there. The extension reads the
+   token from `~/.vault-token`, not `VAULT_TOKEN`.
+2. Run `vaultr extension install --browser chrome` (or `chromium`,
+   `brave`, `edge`, `firefox`). It warns about settings that only your
+   shell has.
+3. Follow the steps it prints:
+   - **Chrome, Chromium, Brave, Edge:** open the extensions page
+     (`chrome://extensions`, `brave://extensions`, `edge://extensions`),
+     turn on Developer mode, click Load unpacked and pick the folder it
+     names. The extension isn't in the Chrome Web Store.
+   - **Firefox:** stable Firefox only installs add-ons signed by Mozilla,
+     and vaultr doesn't ship a signed one yet. Until it does, load it for
+     the session: open `about:debugging#/runtime/this-firefox`, click
+     Load Temporary Add-on and pick the `manifest.json` it names. Firefox
+     forgets it on restart.
+
+After upgrading vaultr, run the install again and click the extension's
+reload button on the extensions page. The popup warns when the extension
+and vaultr versions differ.
+
+`vaultr extension uninstall --browser BROWSER` removes what install
+wrote. Remove the extension itself on the browser's extensions page.
+
+Where the files go:
+
+| | Extension files | Native messaging host manifest |
+|---|---|---|
+| macOS | `~/Library/Application Support/vaultr/extension/` | `~/Library/Application Support/<browser>/NativeMessagingHosts/be.rnsc.vaultr.json` |
+| Linux | `~/.local/share/vaultr/extension/` | `~/.config/<browser>/NativeMessagingHosts/` (Firefox: `~/.mozilla/native-messaging-hosts/`) |
+| Windows | `%LOCALAPPDATA%\vaultr\extension\` | `%LOCALAPPDATA%\vaultr\NativeMessagingHosts\`, registered under `HKEY_CURRENT_USER\Software\<browser>\NativeMessagingHosts\be.rnsc.vaultr` |
+
+The host manifest points to the `vaultr` on your `PATH` when that is the
+binary you ran, so a Homebrew upgrade (which moves the binary to a new
+versioned folder) doesn't break it. `--path` sets another one.
+
+### Using it
+
+- **Shortcut:** `Alt+Shift+V` opens the popup. If another extension
+  already uses it, the browser leaves it unset, and the popup's footer
+  says so. Change it at `chrome://extensions/shortcuts`, or in Firefox
+  under about:addons, gear menu, Manage Extension Shortcuts.
+- **Search** uses the same [query syntax](#query-syntax) as the CLI. `↑`
+  `↓` move, `enter` fills, `esc` clears the search, then closes the
+  popup. An empty search lists the keys you filled recently first.
+- **Namespaces:** when the token can use more than one, a picker next to
+  the search box switches namespace, or searches all of them. The popup
+  remembers the choice.
+- The popup says which field it will fill and on which site, and warns
+  when the page isn't HTTPS.
+- **Logging in:** when the token is missing or expired, the popup offers
+  an OIDC login (it opens the login page in your default browser; open
+  the popup again when done) or a field to paste a token. For `ldap` and
+  `userpass` it asks you to run `vaultr login` in a terminal instead: a
+  directory password usually opens more than Vault, so it stays out of
+  the browser. The extension picks up the saved token.
+
+The browser keeps vaultr running while you use the extension, and closes
+it after 10 minutes without use. With `save_token = false`, a login made
+from the popup lasts until then.
+
+### Limitations
+
+- A field inside a frame from another site (some login forms are
+  embedded that way) can't be filled: the extension only gets access to
+  the page's own site, by design. Open the frame's page in its own tab.
+- Browser pages (`chrome://`, the extension stores, the PDF viewer) can't
+  be filled.
+- Values larger than about 1 MB don't fit in a browser message.
+- Firefox installed with Flatpak can't start programs outside its
+  sandbox.
+- Safari isn't supported.
+
+Any extension the browser loads with vaultr's ID can ask vaultr for
+values. In Chrome the ID comes from a public key in the extension, so an
+unpacked copy would get the same ID; loading one takes Developer mode and
+Load unpacked on your machine. Software already running as you can read
+`~/.vault-token` anyway.
 
 ## Configuration
 
@@ -512,6 +625,11 @@ a root token:
 VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./integration
 ```
 
+The browser tests need Chrome or Chromium (`VAULTR_TEST_CHROME` picks
+one). The end-to-end extension test loads the extension from the command
+line, which Google Chrome no longer allows: it uses Chrome for Testing or
+Chromium (`VAULTR_TEST_EXTENSION_CHROME`), and skips otherwise.
+
 ### What is tested
 
 - **Unit** (`go test ./...`): search ranking and filters; the Vault
@@ -544,16 +662,24 @@ VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=root go test -tags integration ./in
   - namespaces, on OpenBao: nested namespaces, and logging in at the root
     namespace while reading secrets in a team namespace, both from the CLI
     and the TUI
+  - the browser extension: vaultr as a native messaging host started the
+    way Chrome and Firefox start it (their arguments, no `VAULT_*`
+    variables), the fill function on pages with shadow DOM, frames and a
+    React-style field, the popup against a stubbed background, and the
+    real extension loaded in Chrome for Testing filling a page end to end
 
 CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes
 to `main`:
 
-- lint: gofmt, vet, staticcheck, `go mod tidy`, shellcheck
+- lint: gofmt, vet, staticcheck, `go mod tidy`, shellcheck, and
+  `web-ext lint` on the Firefox add-on
 - unit tests with the race detector
 - the integration suite against Vault 1.15, 1.21 and the latest release
   and OpenBao on Linux, plus the latest Vault release on macOS. OpenBao
   also runs the namespace tests, which skip on Vault CE because namespaces
   are an Enterprise feature there.
+- Windows: unit tests, and vaultr as a native messaging host against
+  the latest Vault release
 - a dry run of the release build, with the binaries attached to the run
 
 `ci-ok` is a single job that sums up the others, to use as the required

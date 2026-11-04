@@ -43,15 +43,18 @@ install_openbao() {
 }
 
 install() {
-  local version="$1" os arch dir
+  local version="$1" os arch dir exe=vault
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$os" in
+    mingw* | msys* | cygwin*) os=windows exe=vault.exe ;; # Git Bash on Windows
+  esac
   case "$(uname -m)" in
     x86_64 | amd64) arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
     *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
   esac
   dir="$state/$version"
-  if [[ ! -x "$dir/vault" ]]; then
+  if [[ ! -x "$dir/$exe" ]]; then
     echo "downloading vault $version ($os/$arch)" >&2
     mkdir -p "$dir"
     curl -fsSL -o "$dir/vault.zip" \
@@ -59,7 +62,7 @@ install() {
     unzip -o -q "$dir/vault.zip" -d "$dir"
     rm "$dir/vault.zip"
   fi
-  echo "$dir/vault"
+  echo "$dir/$exe"
 }
 
 start() {

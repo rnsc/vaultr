@@ -78,6 +78,11 @@ func TestCommandsAndFlags(t *testing.T) {
 	eq(t, run(t, "completion", "i"), []string{"install"}, "completion subcommand")
 	eq(t, run(t, "completion", "f"), []string{"fish"}, "shell names from the registry")
 	eq(t, run(t, "find", "stri"), nil, "find queries are free text")
+	eq(t, run(t, "ext"), []string{"extension"}, "extension")
+	eq(t, run(t, "extension", ""), []string{"install", "uninstall"}, "extension subcommands")
+	eq(t, run(t, "extension", "install", "--"), []string{"--browser", "--path"}, "extension flags")
+	eq(t, run(t, "extension", "install", "--browser", ""), []string{"chrome", "chromium", "brave", "edge", "firefox"}, "browsers")
+	eq(t, run(t, "extension", "uninstall", "--browser", "ch"), []string{"chrome", "chromium"}, "browser prefix")
 }
 
 func TestPathsFromCache(t *testing.T) {

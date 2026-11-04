@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>vaultr</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <input id="query" type="search" placeholder="Search paths and keys" autocomplete="off" spellcheck="false" aria-label="Search" />
+      <select id="namespace" aria-label="Namespace" hidden></select>
+    </header>
+    <p id="target" class="note"></p>
+    <ul id="results" role="listbox" aria-label="Results"></ul>
+    <section id="login" hidden>
+      <p id="login-why"></p>
+      <button id="login-oidc" type="button">Log in with OIDC</button>
+      <p id="login-url" class="note" hidden></p>
+      <form id="login-token-form">
+        <label for="login-token">Or paste a Vault token</label>
+        <input id="login-token" type="password" autocomplete="off" spellcheck="false" />
+        <button type="submit">Use token</button>
+      </form>
+    </section>
+    <p id="message" role="status" hidden></p>
+    <footer>
+      <span id="status"></span>
+      <span id="shortcut"></span>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>
