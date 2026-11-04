@@ -503,7 +503,7 @@ func TestExtensionEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	udd := t.TempDir()
+	udd := profileDir(t)
 	hm, err := browserext.HostManifest(browserext.Chromium, binPath)
 	if err != nil {
 		t.Fatal(err)
@@ -526,9 +526,10 @@ func TestExtensionEndToEnd(t *testing.T) {
 		// browser's, not this test's.
 		chromedp.Env("HOME="+home, "VAULT_ADDR=", "VAULT_TOKEN=", "VAULTR_CONFIG=", "XDG_CONFIG_HOME="),
 	)
-	if os.Geteuid() == 0 {
-		opts = append(opts, chromedp.NoSandbox)
-	}
+	// Without the sandbox: a downloaded Chrome for Testing can't use it
+	// on Ubuntu 23.10 and later, which restrict the user namespaces it
+	// needs. This browser only opens the test's own local pages.
+	opts = append(opts, chromedp.NoSandbox)
 	actx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	t.Cleanup(cancel)
 	page1, cancel := chromedp.NewContext(actx)
@@ -598,6 +599,27 @@ func TestExtensionEndToEnd(t *testing.T) {
 	if refused != "bad_request" {
 		t.Errorf("get from the popup: %q", refused)
 	}
+}
+
+// profileDir is a Chrome profile folder, removed after the test. Not
+// t.TempDir: Chrome's helper processes can still write to it for a
+// moment after the browser is stopped, and TempDir fails the test when
+// its removal does. This retries for a few seconds, then gives up quietly.
+func profileDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "vaultr-chrome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 20; i++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	})
+	return dir
 }
 
 func jsString(s string) string {
