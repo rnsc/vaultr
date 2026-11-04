@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +120,13 @@ func run(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	binPath = filepath.Join(dir, "vaultr")
-	build := exec.Command("go", "build", "-race", "-o", binPath, "github.com/rnsc/vaultr")
+	buildArgs := []string{"build", "-race"}
+	if runtime.GOOS == "windows" {
+		// -race needs cgo there; and Windows runs only "name.exe".
+		binPath += ".exe"
+		buildArgs = []string{"build"}
+	}
+	build := exec.Command("go", append(buildArgs, "-o", binPath, "github.com/rnsc/vaultr")...)
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building vaultr:", err)

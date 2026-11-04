@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -41,7 +42,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // no Unix modes on Windows
 		t.Errorf("mode %v", st.Mode().Perm())
 	}
 	back, found, err := ReadFile(p)

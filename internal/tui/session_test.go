@@ -219,7 +219,10 @@ func TestTokenCountdown(t *testing.T) {
 		{5 * time.Minute, true, "token expires in 4m", true},
 		{-time.Minute, false, "token expired · ^l to log in", true},
 	} {
-		m.token = vault.TokenInfo{ExpireTime: time.Now().Add(c.left), Renewable: c.renewable}
+		// A second less, so the expected rounding down doesn't depend on
+		// time passing before tokenStatus reads the clock (Windows' clock
+		// is coarse enough for none to).
+		m.token = vault.TokenInfo{ExpireTime: time.Now().Add(c.left - time.Second), Renewable: c.renewable}
 		m.tokenOK = true
 		got, warn := m.tokenStatus()
 		if got != c.want || warn != c.warn {

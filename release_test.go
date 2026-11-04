@@ -95,6 +95,7 @@ func TestNextVersion(t *testing.T) {
 		{"ci: runners", []string{".github/workflows/ci.yml", "scripts/install.sh"}, nil, "", "nothing shipped"},
 		{"test: more", []string{"main_test.go", "integration/x_test.go", "internal/testvault/f.go", "tools/seed/main.go"}, nil, "", "nothing shipped"},
 		{"docs: shells", []string{"internal/complete/shells/README.md"}, nil, "", "nothing shipped"},
+		{"docs: xpi", []string{"extension/dist/README.md"}, nil, "", "nothing shipped"},
 		{"feat: docs only [release]", []string{"README.md"}, nil, "v0.2.0", ""},
 		{"docs: again", []string{"README.md"}, []string{"patch"}, "v0.1.1", ""}, // an explicit bump always releases
 		// Anything shipped releases, with the bump from the message.
@@ -103,6 +104,8 @@ func TestNextVersion(t *testing.T) {
 		{"deps", []string{"go.sum"}, nil, "v0.1.1", ""},
 		{"brew", []string{".goreleaser.yaml"}, nil, "v0.1.1", ""},
 		{"zsh", []string{"internal/complete/shells/zsh.zsh"}, nil, "v0.1.1", ""},
+		{"popup", []string{"extension/popup.js"}, nil, "v0.1.1", ""},
+		{"icon", []string{"extension/icons/16.png"}, nil, "v0.1.1", ""},
 		{"feat!: breaking", []string{"main.go"}, nil, "v1.0.0", ""},
 		{"fix: code [skip release]", []string{"main.go"}, nil, "", "skip the release"},
 	}

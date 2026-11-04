@@ -21,6 +21,15 @@ names from a local index, and fetches values live on demand.
 - `internal/auth`: login methods (oidc, ldap, userpass, token).
 - `internal/complete`: shell completion. Logic in Go, thin scripts in
   `shells/` (see `shells/README.md` to add a shell).
+- `extension/`: the browser extension, plain JS with no build step,
+  embedded in the binary (`embed.go` lists the files). One
+  `manifest.json` for both browsers; the installer writes a per-browser
+  copy with vaultr's version.
+- `internal/nativehost`: the native messaging protocol and its handler.
+  `nativehost.go` in `main` adapts the `app` to it; `isNativeHost`
+  recognizes the arguments browsers start vaultr with.
+- `internal/browserext`: install paths per OS and browser, host
+  manifests, the Windows registry.
 - `internal/testvault`: fixtures and a fake OIDC IdP for integration tests.
 - `integration/`: tests against a real server (build tag `integration`).
 
@@ -35,6 +44,16 @@ names from a local index, and fetches values live on demand.
 - **No cgo.** Releases cross-compile with `CGO_ENABLED=0`.
 - **Shell completion must stay silent and fast:** `vaultr __complete`
   always exits 0, never writes to stderr, and gives up after 3 seconds.
+- **In native host mode, stdout carries only protocol frames.** Values
+  go only to the background script's fill, never to the popup, and only
+  for the one key picked. The popup can't send `get` (`POPUP_TYPES` in
+  `background.js`). The extension keeps its three permissions
+  (`activeTab`, `scripting`, `nativeMessaging`): no host permissions, no
+  content scripts. Directory passwords (ldap, userpass) never go through
+  the extension.
+- **The Chrome extension ID** comes from the public `key` in
+  `extension/manifest.json` and is pinned in `browserext.ChromeID` and
+  every user's host manifest: don't change the key.
 
 ## Checking changes
 
@@ -55,7 +74,11 @@ shell code must work with it), plus a non-blocking Ubuntu 26.04 job.
 Every change needs tests: unit tests next to the code, and integration
 tests when it talks to Vault. TUI screens have unit tests with a fake
 backend (`internal/tui/backend_test.go`) and pty tests in
-`integration/tui_test.go`.
+`integration/tui_test.go`. The extension has host-mode tests
+(`integration/nativehost_test.go`) and browser tests
+(`integration/extension_test.go`); the end-to-end one needs Chrome for
+Testing or Chromium (`VAULTR_TEST_EXTENSION_CHROME`), as Google Chrome
+ignores `--load-extension`.
 
 ## Commits, PRs and releases
 
@@ -76,6 +99,20 @@ backend (`internal/tui/backend_test.go`) and pty tests in
 - **Demo GIFs** (`demo/*.gif`) are recorded by CI when Go code, the tapes
   or the demo scripts change, and committed back to the PR branch. Don't
   edit them or `demo/inputs.sha256` by hand; change `demo/*.tape`.
+
+## Firefox signing
+
+Stable Firefox installs only add-ons signed by Mozilla. The release
+workflow signs each release's add-on on AMO as an unlisted add-on
+(`scripts/sign-firefox.sh`, with the `AMO_JWT_ISSUER` and
+`AMO_JWT_SECRET` secrets) before pushing the tag, so a signing failure
+releases nothing. The signed file goes to `extension/dist/vaultr.xpi`
+(gitignored), which `go:embed` puts in the binary, and is attached to the
+release with its checksum. AMO signs a version once: a rerun downloads
+the already signed file (`tools/amo`), and either way it must hold
+exactly the files exported from the release commit. Prereleases get no
+signed add-on. CI's `firefox-addon` job rehearses all of this except
+the AMO call (`scripts/sign-firefox.sh --unsigned`).
 
 ## Writing style
 

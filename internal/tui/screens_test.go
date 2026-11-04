@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -192,7 +194,7 @@ func TestConfigEditorCreatesFile(t *testing.T) {
 		t.Errorf("backend reloaded %d times", fb.reloads)
 	}
 	st, err := os.Stat(fb.settings.Path)
-	if err != nil || st.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) { // no Unix modes on Windows
 		t.Fatalf("file: %v %v", err, st)
 	}
 	f, found, err := config.ReadFile(fb.settings.Path)
@@ -310,7 +312,7 @@ func TestConfigEditorLongPath(t *testing.T) {
 
 func TestDisplayPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
-	if got := displayPath(home+"/.config/vaultr/config.toml", 48); got != "~/.config/vaultr/config.toml" {
+	if got := displayPath(filepath.Join(home, ".config", "vaultr", "config.toml"), 48); got != filepath.Join("~", ".config", "vaultr", "config.toml") {
 		t.Errorf("home path: %q", got)
 	}
 	long := "/var/folders/36/" + strings.Repeat("x", 80) + "/cfg/config.toml"

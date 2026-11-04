@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/rnsc/vaultr/internal/browserext"
 )
 
 // Source supplies secret paths and key names.
@@ -29,24 +31,27 @@ type NamespaceSource interface {
 
 // Commands and their flags, for completing the first word and options.
 var (
-	Commands = []string{"find", "get", "versions", "open", "env", "exec", "login", "index", "refresh", "status", "purge", "config", "completion", "version", "help"}
+	Commands = []string{"find", "get", "versions", "open", "env", "exec", "login", "index", "refresh", "status", "purge", "config", "completion", "extension", "version", "help"}
 
-	// Every command but login takes --ns/--namespace, before or after it.
+	// Every command but login and extension takes --ns/--namespace,
+	// before or after it.
 	flags = map[string][]string{
-		"":         {"-r", "--refresh", "--ns", "--namespace"}, // before any command
-		"find":     {"--json", "--values", "-n", "-r", "--refresh", "--all-ns", "--ns", "--namespace"},
-		"get":      {"--json", "--version", "--ns", "--namespace"},
-		"versions": {"--json", "--ns", "--namespace"},
-		"open":     {"--print", "--ns", "--namespace"},
-		"env":      {"--prefix", "--format", "--ns", "--namespace"},
-		"exec":     {"--prefix", "--ns", "--namespace"},
-		"index":    {"--ns", "--namespace"},
-		"status":   {"--ns", "--namespace"},
-		"purge":    {"--ns", "--namespace"},
-		"login":    {"-method", "-mount", "-namespace", "-username", "-role", "-callback-port", "-no-save"},
+		"":          {"-r", "--refresh", "--ns", "--namespace"}, // before any command
+		"find":      {"--json", "--values", "-n", "-r", "--refresh", "--all-ns", "--ns", "--namespace"},
+		"get":       {"--json", "--version", "--ns", "--namespace"},
+		"versions":  {"--json", "--ns", "--namespace"},
+		"open":      {"--print", "--ns", "--namespace"},
+		"env":       {"--prefix", "--format", "--ns", "--namespace"},
+		"exec":      {"--prefix", "--ns", "--namespace"},
+		"index":     {"--ns", "--namespace"},
+		"status":    {"--ns", "--namespace"},
+		"purge":     {"--ns", "--namespace"},
+		"login":     {"-method", "-mount", "-namespace", "-username", "-role", "-callback-port", "-no-save"},
+		"extension": {"--browser", "--path"},
 	}
 	subcommands = map[string][]string{
-		"config": {"show", "path", "init"},
+		"config":    {"show", "path", "init"},
+		"extension": {"install", "uninstall"},
 	}
 	aliases = map[string]string{"search": "find", "f": "find", "g": "get", "reindex": "index"}
 )
@@ -121,6 +126,17 @@ func Candidates(ctx context.Context, sources []Source, args []string) []string {
 	case "config":
 		if len(prev) == 1 {
 			return filter(subcommands[cmd], cur)
+		}
+	case "extension":
+		if len(prev) == 1 {
+			return filter(subcommands[cmd], cur)
+		}
+		if last := prev[len(prev)-1]; last == "--browser" || last == "-browser" {
+			var names []string
+			for _, b := range browserext.Browsers {
+				names = append(names, string(b))
+			}
+			return filter(names, cur)
 		}
 	case "completion":
 		if len(prev) == 1 {

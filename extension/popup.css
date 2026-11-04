@@ -1,0 +1,160 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --dim: #656d76;
+  --line: #d0d7de;
+  --sel: #ddeafd;
+  --accent: #1e3a5f;
+  --warn: #9a6700;
+  --err: #cf222e;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c2128;
+    --fg: #e6edf3;
+    --dim: #8d96a0;
+    --line: #3d444d;
+    --sel: #263c5a;
+    --accent: #9ec5fe;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 460px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+#query {
+  flex: 1;
+  min-width: 0;
+}
+
+#namespace {
+  max-width: 150px;
+}
+
+.note {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.note.warn {
+  color: var(--warn);
+}
+
+#results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+#results:empty {
+  display: none;
+}
+
+#results li {
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#results li[aria-selected="true"] {
+  background: var(--sel);
+}
+
+#results .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* cut long paths on the left, keep the end */
+  text-align: left;
+}
+
+#results .ns,
+#results .recent {
+  color: var(--dim);
+}
+
+#results .key {
+  font-weight: 600;
+}
+
+#login {
+  padding: 8px;
+}
+
+#login form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#login label {
+  width: 100%;
+  color: var(--dim);
+}
+
+#login-token {
+  flex: 1;
+}
+
+#message {
+  margin: 0;
+  padding: 8px;
+}
+
+#message.error {
+  color: var(--err);
+}
+
+code {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 11px;
+}

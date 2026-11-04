@@ -81,6 +81,18 @@ jobs:
             exit 1
           fi
 
+      # Signed before the tag is pushed: if AMO fails, nothing is released
+      # and the run can be retried. The signed add-on lands in
+      # extension/dist/, where the build embeds it (gitignored, so
+      # GoReleaser still sees a clean tree).
+      - name: Sign the Firefox add-on (AMO, unlisted)
+        if: steps.version.outputs.tag != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: scripts/sign-firefox.sh "$TAG"
+
       - name: Tag
         if: steps.version.outputs.tag != '' && steps.version.outputs.create == 'true'
         env:
@@ -103,6 +115,19 @@ jobs:
           # Pushes the cask to rnsc/homebrew-tap (a deploy key for that repo).
           HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
 
+      # The add-on is attached here rather than in .goreleaser.yaml, whose
+      # snapshot builds in CI have no signed add-on to attach.
+      - name: Attach the Firefox add-on
+        if: steps.version.outputs.tag != '' && hashFiles('extension/dist/vaultr.xpi') != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="vaultr_${TAG#v}_firefox.xpi"
+          cp extension/dist/vaultr.xpi "dist/$name"
+          (cd dist && sha256sum "$name" >> SHA256SUMS)
+          gh release upload "$TAG" "dist/$name" dist/SHA256SUMS --clobber
+
       # Build provenance (verify with `gh attestation verify`). GitHub only
       # offers this for public repositories on the free plan.
       - name: Attest build provenance
@@ -112,3 +137,4 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.xpi

@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "vaultr",
+  "description": "Fill the focused field with a value from HashiCorp Vault or OpenBao, through the vaultr command line tool.",
+  "version": "0.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqgVq1O7GE632VQfbuoZxUmoIe9E0slW8+v0E2b3Ct53rk7vgC1ZkTYSc9cR7awJeDxZB8Vmp9XtstX0ZYw4oIgAFEoqKQ73Q3yZFHtFBJbbCVDLd7WWxSm8sHVyVeZiq9RksbFT28u3IZD5e0LZSXhUmiz9Hl9AtCQJr4JHr169O2Z6163URHNRvsxOvVFD2tEzWJS5JW5DRZc6rHZCDOpjPWUuFKtT+NrJHHmNHbqVCQcjpNc+gOI/Hq4WaJ/wITCOxlb0sDN+NoYz4tYYr6BiLekhy/pFSHRlofLIhoo4K5dEGgM5HrN/UwyPOxFVrub6Ibccuqn91e6qkJMMNkQIDAQAB",
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["fill.js", "background.js"]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "vaultr: fill the focused field",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+V" },
+      "description": "Open vaultr to fill the focused field"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vaultr@rnsc.be",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": { "required": ["none"] }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
+}

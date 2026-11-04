@@ -3,3 +3,6 @@
 /.cache/
 /coverage*.out
 /completions/
+
+# Signed Firefox add-on, made by the release workflow
+/extension/dist/*.xpi

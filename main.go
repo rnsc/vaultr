@@ -62,11 +62,19 @@ Usage:
   vaultr completion install      set up tab completion for your shell
   vaultr completion SHELL        print the completion script (see
                                  vaultr completion list)
+  vaultr extension install --browser BROWSER
+                                 set up the browser extension, which fills
+                                 the focused field with a value (chrome,
+                                 chromium, brave, edge, firefox); also
+                                 extension uninstall
   vaultr version
 
-Every command except login takes --ns NAMESPACE (or --namespace) to work
-in another namespace for this run; "/" is the root namespace. Tab
-completes namespace names.
+The browser extension runs vaultr without your shell's environment: it
+reads ~/.config/vaultr/config.toml and ~/.vault-token only.
+
+Every command except login and extension takes --ns NAMESPACE (or
+--namespace) to work in another namespace for this run; "/" is the root
+namespace. Tab completes namespace names.
 
 Query syntax: space separated terms, all must match (case-insensitive
 substring of the path or key name). Prefix a term with k: or p: to match
@@ -115,6 +123,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if isNativeHost(args) {
+		return nativeHost(ctx)
+	}
 	cmd := ""
 	if len(args) > 0 {
 		cmd = args[0]
@@ -130,6 +141,8 @@ func run(ctx context.Context, args []string) error {
 		return configCmd(args[1:])
 	case "completion":
 		return completionCmd(args[1:])
+	case "extension":
+		return extensionCmd(args[1:], os.Stderr)
 	case "__complete":
 		completeCmd(ctx, args[1:])
 		return nil

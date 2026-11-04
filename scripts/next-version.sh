@@ -24,9 +24,10 @@ mode="${1:-auto}"
 
 # shipped filters paths to those that change a release. Keep it in sync
 # with what the build reads: Go code (not tests or test helpers), modules,
-# the completion scripts embedded in the binary and GoReleaser's config.
+# the completion scripts and browser extension embedded in the binary and
+# GoReleaser's config.
 shipped() {
-  grep -E '\.go$|^go\.(mod|sum)$|^\.goreleaser\.yaml$|^internal/complete/shells/' |
+  grep -E '\.go$|^go\.(mod|sum)$|^\.goreleaser\.yaml$|^internal/complete/shells/|^extension/' |
     grep -vE '_test\.go$|^integration/|^internal/testvault/|^tools/|\.md$' || true
 }
 
