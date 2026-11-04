@@ -42,6 +42,9 @@ out="$root/extension/dist/vaultr.xpi"
 rm -f "$out"
 
 go run . extension export --browser firefox --version "$tag" "$work/src"
+# What the result is checked against: web-ext sign writes a file of its
+# own (.amo-upload-uuid) into the folder it signs.
+cp -R "$work/src" "$work/ref"
 
 if [[ -n "$unsigned" ]]; then
   npx --yes web-ext@10.8.0 build --source-dir "$work/src" --artifacts-dir "$work/signed"
@@ -61,7 +64,7 @@ else
   exit 1
 fi
 
-go run ./tools/amo verify -xpi "$out" -dir "$work/src"
+go run ./tools/amo verify -xpi "$out" -dir "$work/ref"
 if [[ -n "$unsigned" ]]; then
   echo "unsigned Firefox add-on $version (rehearsal): $out" >&2
 else

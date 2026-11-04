@@ -129,6 +129,27 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyExplainsJSONChanges(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"version":"1.0.0","a":{"b":1,"c":2}}`), 0o644)
+	xpi := filepath.Join(t.TempDir(), "a.xpi")
+	writeZip(t, xpi, map[string]string{"manifest.json": `{"version":"1.0.0","a":{"b":1,"d":3},"x":true}`})
+	err := verify(xpi, dir)
+	for _, want := range []string{"manifest.json: differs:", "a.c: removed (was 2)", "a.d: added: 3", "x: added: true"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("want %q in: %v", want, err)
+		}
+	}
+	writeZip(t, xpi, map[string]string{"manifest.json": "{\n  \"a\": {\"c\": 2, \"b\": 1},\n  \"version\": \"1.0.0\"\n}"})
+	if err := verify(xpi, dir); err == nil || !strings.Contains(err.Error(), "formatting only") {
+		t.Errorf("reformatted: %v", err)
+	}
+	writeZip(t, xpi, map[string]string{"manifest.json": `{"version":"2.0.0","a":{"b":1,"c":2}}`})
+	if err := verify(xpi, dir); err == nil || !strings.Contains(err.Error(), `version: "2.0.0", exported "1.0.0"`) {
+		t.Errorf("changed value: %v", err)
+	}
+}
+
 func TestRunUsage(t *testing.T) {
 	t.Setenv("WEB_EXT_API_KEY", "")
 	for _, args := range [][]string{nil, {"nope"}, {"fetch"}, {"fetch", "-version", "1", "-out", "x"}, {"verify"}} {

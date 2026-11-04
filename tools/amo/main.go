@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -178,6 +179,69 @@ func (c *client) signedFile(ctx context.Context, version string) ([]byte, error)
 	return data, nil
 }
 
+// jsonChanges describes how got differs from want, field by field, or
+// says the difference is only in formatting. Values in the add-on's
+// manifest aren't secret.
+func jsonChanges(got, want []byte) string {
+	var g, w any
+	if json.Unmarshal(got, &g) != nil || json.Unmarshal(want, &w) != nil {
+		return " (not valid JSON)"
+	}
+	var changes []string
+	diffJSON("", g, w, &changes)
+	if len(changes) == 0 {
+		return " (formatting only, same JSON)"
+	}
+	return ":\n    " + strings.Join(changes, "\n    ")
+}
+
+func diffJSON(path string, got, want any, out *[]string) {
+	gm, gok := got.(map[string]any)
+	wm, wok := want.(map[string]any)
+	if gok && wok {
+		keys := map[string]bool{}
+		for k := range gm {
+			keys[k] = true
+		}
+		for k := range wm {
+			keys[k] = true
+		}
+		sorted := make([]string, 0, len(keys))
+		for k := range keys {
+			sorted = append(sorted, k)
+		}
+		sort.Strings(sorted)
+		for _, k := range sorted {
+			p := k
+			if path != "" {
+				p = path + "." + k
+			}
+			gv, inG := gm[k]
+			wv, inW := wm[k]
+			switch {
+			case !inG:
+				*out = append(*out, p+": removed (was "+short(wv)+")")
+			case !inW:
+				*out = append(*out, p+": added: "+short(gv))
+			default:
+				diffJSON(p, gv, wv, out)
+			}
+		}
+		return
+	}
+	if !reflect.DeepEqual(got, want) {
+		*out = append(*out, path+": "+short(got)+", exported "+short(want))
+	}
+}
+
+func short(v any) string {
+	b, _ := json.Marshal(v)
+	if len(b) > 200 {
+		return string(b[:200]) + "..."
+	}
+	return string(b)
+}
+
 // verify checks that the .xpi holds exactly dir's files, byte for byte,
 // besides META-INF/ (the signature).
 func verify(xpi, dir string) error {
@@ -220,7 +284,13 @@ func verify(xpi, dir string) error {
 			return err
 		}
 		if !bytes.Equal(got, want) {
-			problems = append(problems, name+": differs")
+			msg := name + ": differs"
+			if strings.HasSuffix(name, ".json") {
+				// Say what changed, so a change made by signing can be
+				// told from a wrong file.
+				msg += jsonChanges(got, want)
+			}
+			problems = append(problems, msg)
 		}
 		return nil
 	})
