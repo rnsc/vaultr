@@ -168,6 +168,7 @@ func TestConfigWarnings(t *testing.T) {
 func TestHostBackendReloadChanges(t *testing.T) {
 	setEnv(t, map[string]string{"VAULT_ADDR": "", "VAULT_TOKEN": ""})
 	home := os.Getenv("HOME")
+	t.Setenv("USERPROFILE", home) // where Windows looks for ~/.vault-token
 	cfg := os.Getenv("VAULTR_CONFIG")
 	write := func(p, body string) {
 		t.Helper()
