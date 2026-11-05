@@ -54,22 +54,40 @@ go install github.com/rnsc/vaultr@latest
 
 ```sh
 export VAULT_ADDR=https://vault.example.com
-vault login -method=oidc        # or VAULT_TOKEN=...
+vaultr login                    # log in with the [auth] defaults from the config
+vaultr login -method ldap -username jdoe   # or `vault login`, or VAULT_TOKEN=...
 
 vaultr                          # interactive search
 vaultr prod db                  # interactive, pre-filled query
+vaultr -r                       # TUI, refreshing the index at startup
+
 vaultr find stripe k:key        # print "path<TAB>key" lines (exit 1 if none)
 vaultr find --values ldap       # also fetch the matching values
 vaultr find --json -n 20 redis  # JSON lines
 vaultr find -r paypal           # refresh the index first (secret added since)
-vaultr -r                       # TUI, refreshing the index at startup
+vaultr find --all-ns k:password # search every namespace
+
 vaultr get secret/prod/db password
-vaultr login                    # log in with the [auth] defaults from the config
-vaultr login -method ldap -username jdoe
+vaultr get --version 3 secret/prod/db   # an older version (KV v2)
+vaultr versions secret/prod/db  # list its versions
+vaultr open secret/prod/db      # open it in the Vault web UI
+
+vaultr env secret/prod/db       # its keys as shell exports
+vaultr exec secret/prod/db -- ./migrate.sh   # run a command with them
+
+vaultr --ns team-a find redis   # any command in another namespace ("/" = root)
+
 vaultr index                    # force a rebuild
 vaultr status                   # cache age, expiry, binding
 vaultr purge                    # delete cache and its key
+
+vaultr config init              # write a config template (config show: current settings)
+vaultr completion install       # tab completion for your shell
+vaultr extension install --browser chrome   # browser extension (chromium, brave, edge, firefox)
 ```
+
+Each of these has a section below; `vaultr help` lists every command and
+flag.
 
 ### Tab completion
 
